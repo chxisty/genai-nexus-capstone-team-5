@@ -376,3 +376,91 @@ def test_redact_secrets_masks_tokens():
     assert "AIzaSyTestKey1234567890" not in masked
     assert "gsk_AbCdEfGhIjKlMnOp" not in masked
     assert "tok_xyz" not in masked
+
+
+def test_neha_four_tool_schemas_translate_cleanly_for_gemini_and_groq():
+    neha_schemas = [
+        {
+            "type": "function",
+            "function": {
+                "name": "station_search",
+                "description": "Search for railway stations by name or partial name.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string", "description": "Station name."}},
+                    "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "train_search",
+                "description": "Search for trains between two stations on a given date.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string"},
+                        "destination": {"type": "string"},
+                        "date": {"type": "string"},
+                    },
+                    "required": ["source", "destination", "date"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "train_details",
+                "description": "Get detailed information about a specific train by its number.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"train_number": {"type": "string"}},
+                    "required": ["train_number"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "route_lookup",
+                "description": "Look up the route for a given train number.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"train_number": {"type": "string"}},
+                    "required": ["train_number"],
+                },
+            },
+        },
+    ]
+
+    text_part = SimpleNamespace(text="Found 4 tools.", function_call=None)
+    fake_gemini = _make_fake_gemini_module(
+        lambda *a, **kw: SimpleNamespace(
+            candidates=[SimpleNamespace(content=SimpleNamespace(parts=[text_part]), finish_reason="STOP")],
+            usage_metadata=None,
+        )
+    )
+    gem_client = LLMClient(
+        config=LLMConfig(provider="gemini", gemini_api_key="AIza_test"),
+        gemini_module=fake_gemini,
+    )
+    gem_res = gem_client.chat([{"role": "user", "content": "Find trains"}], tools=neha_schemas)
+    assert gem_res.content == "Found 4 tools."
+    passed_tools = fake_gemini.GenerativeModel.call_args.kwargs["tools"]
+    decl_names = [fd.name for fd in passed_tools[0].function_declarations]
+    assert decl_names == ["station_search", "train_search", "train_details", "route_lookup"]
+
+    mock_groq = MagicMock()
+    mock_groq.chat.completions.create.return_value = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="OK", tool_calls=[]), finish_reason="stop")],
+        usage=None,
+        model="llama-3.3-70b-versatile",
+    )
+    groq_client = LLMClient(
+        config=LLMConfig(provider="groq", groq_api_key="gsk_test"),
+        groq_client=mock_groq,
+    )
+    groq_res = groq_client.chat([{"role": "user", "content": "Find trains"}], tools=neha_schemas)
+    assert groq_res.content == "OK"
+    assert mock_groq.chat.completions.create.call_args.kwargs["tools"] == neha_schemas

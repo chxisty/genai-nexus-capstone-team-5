@@ -1,4 +1,4 @@
-"""Unit tests for helpdesk.llm (multi-provider Gemini + Groq client)."""
+"""Unit tests for helpdesk.llm (multi-provider google-genai Gemini + Groq client)."""
 
 from __future__ import annotations
 
@@ -49,37 +49,29 @@ class _FakeGeminiTimeoutError(Exception):
     code = 504
 
 
-def _make_fake_gemini_module(response_factory):
-    """Build a minimal stub mimicking google.generativeai & protos for unit tests."""
-    import warnings
+class _FakeGeminiServerError(Exception):
+    code = 503
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", FutureWarning)
-        import google.generativeai as real_genai
 
-    fake_mod = MagicMock()
-    fake_mod.protos = real_genai.protos
-    fake_mod.types = real_genai.types
-    fake_mod.configure = MagicMock()
-
-    def _model_ctor(**kwargs):
-        model = MagicMock()
-        model.init_kwargs = kwargs
-        model.generate_content = MagicMock(side_effect=response_factory)
-        return model
-
-    fake_mod.GenerativeModel = MagicMock(side_effect=_model_ctor)
-    return fake_mod
+def _make_fake_gemini_client(response_factory):
+    """Build a minimal stub mimicking google.genai.Client & models.generate_content."""
+    fake_client = MagicMock()
+    fake_client.models = MagicMock()
+    fake_client.models.generate_content = MagicMock(side_effect=response_factory)
+    return fake_client
 
 
 def test_config_defaults_to_gemini_and_hides_secrets(monkeypatch):
+    monkeypatch.setattr("helpdesk.llm.load_dotenv", lambda *a, **kw: False)
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("GROQ_MODEL", raising=False)
 
     cfg = LLMConfig.from_env(env_file=None)
     assert cfg.resolve_provider() == "gemini"
-    assert cfg.active_model() == "gemini-2.5-flash"
+    assert cfg.active_model() == "gemini-3.5-flash"
 
     secret_cfg = LLMConfig(
         provider="groq",
@@ -87,7 +79,7 @@ def test_config_defaults_to_gemini_and_hides_secrets(monkeypatch):
         gemini_api_key="AIzaSySuperSecretKey123456",
     )
     assert secret_cfg.resolve_provider() == "groq"
-    assert secret_cfg.active_model() == "llama-3.3-70b-versatile"
+    assert secret_cfg.active_model() == "openai/gpt-oss-120b"
     rendered = repr(secret_cfg)
     assert "gsk_supersecret" not in rendered
     assert "AIzaSySuperSecret" not in rendered
@@ -131,7 +123,7 @@ def test_groq_successful_response_and_tool_call_parsing():
             )
         ],
         usage=SimpleNamespace(prompt_tokens=20, completion_tokens=10, total_tokens=30),
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
     )
     mock_groq = MagicMock()
     mock_groq.chat.completions.create.return_value = raw_resp
@@ -155,17 +147,24 @@ def test_groq_successful_response_and_tool_call_parsing():
     ]
     res = client.chat([{"role": "user", "content": "Need Aadhaar for Tatkal?"}], tools=tools)
     assert res.provider == "groq"
+    assert res.model == "openai/gpt-oss-120b"
     assert res.has_tool_calls is True
     assert res.tool_calls[0].name == "search_documents"
     assert res.tool_calls[0].arguments == {"query": "Tatkal Aadhaar"}
     assert res.usage["total_tokens"] == 30
 
 
-def test_gemini_successful_response_and_tool_translation():
-    text_part = SimpleNamespace(text="Train 12002 departs New Delhi at 06:15.", function_call=None)
+def test_gemini_successful_response_and_tool_translation_with_thought_signature():
+    text_part = SimpleNamespace(text="Train 12002 departs New Delhi at 06:15.", function_call=None, thought=False)
     fc_part = SimpleNamespace(
         text=None,
-        function_call=SimpleNamespace(name="query_timetable", args={"train_number": "12002"}),
+        thought=False,
+        thought_signature=b"sig_bytes_123",
+        function_call=SimpleNamespace(
+            id="call_gem_1",
+            name="query_timetable",
+            args={"train_number": "12002"},
+        ),
     )
 
     responses = iter(
@@ -180,9 +179,9 @@ def test_gemini_successful_response_and_tool_translation():
             ),
         ]
     )
-    fake_gemini = _make_fake_gemini_module(lambda *a, **kw: next(responses))
+    fake_client = _make_fake_gemini_client(lambda *a, **kw: next(responses))
     cfg = LLMConfig(provider="gemini", gemini_api_key="AIza_test_key")
-    client = LLMClient(config=cfg, gemini_module=fake_gemini)
+    client = LLMClient(config=cfg, gemini_client=fake_client)
 
     tools = [
         {
@@ -208,24 +207,63 @@ def test_gemini_successful_response_and_tool_translation():
     )
     assert first.provider == "gemini"
     assert first.has_tool_calls is True
+    assert first.tool_calls[0].id == "call_gem_1"
     assert first.tool_calls[0].name == "query_timetable"
     assert first.tool_calls[0].arguments == {"train_number": "12002"}
+    assert first.tool_calls[0].thought_signature == b"sig_bytes_123"
 
+    # Simulate AIAssistant serializing tool_calls into OpenAI-style dicts (no signature field on dict)
+    serialized_calls = [
+        {
+            "id": first.tool_calls[0].id,
+            "type": "function",
+            "function": {"name": "query_timetable", "arguments": '{"train_number": "12002"}'},
+        }
+    ]
     second = client.chat(
         [
             {"role": "system", "content": "Be grounded."},
             {"role": "user", "content": "When does 12002 depart?"},
-            {"role": "assistant", "content": "", "tool_calls": first.tool_calls},
+            {"role": "assistant", "content": "", "tool_calls": serialized_calls},
             {
                 "role": "tool",
                 "tool_call_id": first.tool_calls[0].id,
                 "name": "query_timetable",
                 "content": '{"rows": [{"departure": "06:15"}]}',
             },
-        ]
+        ],
+        tools=tools,
     )
     assert second.has_tool_calls is False
     assert "06:15" in second.content
+
+    # Verify cached thought_signature and FunctionResponse.id were preserved in reconstructed contents
+    sent_contents = fake_client.models.generate_content.call_args_list[1].kwargs["contents"]
+    model_part = sent_contents[1].parts[0]
+    tool_part = sent_contents[2].parts[0]
+    assert model_part.thought_signature == b"sig_bytes_123"
+    assert model_part.function_call.id == "call_gem_1"
+    assert tool_part.function_response.id == "call_gem_1"
+
+
+def test_gemini_filters_internal_thought_parts():
+    thought_part = SimpleNamespace(text="Internal chain of thought...", function_call=None, thought=True)
+    answer_part = SimpleNamespace(text='{"answer": "60 days", "sources": [], "dont_know": false}', function_call=None, thought=False)
+
+    fake_client = _make_fake_gemini_client(
+        lambda *a, **kw: SimpleNamespace(
+            candidates=[SimpleNamespace(content=SimpleNamespace(parts=[thought_part, answer_part]), finish_reason="STOP")],
+            usage_metadata=None,
+        )
+    )
+    client = LLMClient(
+        config=LLMConfig(provider="gemini", gemini_api_key="AIza_ok"),
+        gemini_client=fake_client,
+    )
+    parsed = client.generate_json([{"role": "user", "content": "ARP?"}])
+    assert parsed["answer"] == "60 days"
+    passed_cfg = fake_client.models.generate_content.call_args.kwargs["config"]
+    assert passed_cfg.response_mime_type == "application/json"
 
 
 def test_groq_auth_error_does_not_retry():
@@ -248,7 +286,7 @@ def test_rate_limit_retries_and_succeeds():
     raw_resp = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content="Recovered", tool_calls=[]), finish_reason="stop")],
         usage=None,
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
     )
     mock_groq = MagicMock()
     mock_groq.chat.completions.create.side_effect = [
@@ -305,36 +343,44 @@ def test_timeout_and_connection_errors():
 
 
 def test_gemini_error_mapping():
-    fake_auth = _make_fake_gemini_module(lambda *a, **kw: (_ for _ in ()).throw(_FakeGeminiAuthError("API_KEY_INVALID")))
+    fake_auth = _make_fake_gemini_client(lambda *a, **kw: (_ for _ in ()).throw(_FakeGeminiAuthError("API_KEY_INVALID")))
     client = LLMClient(
         config=LLMConfig(provider="gemini", gemini_api_key="AIza_bad", max_retries=2),
-        gemini_module=fake_auth,
+        gemini_client=fake_auth,
         sleep_fn=lambda _: None,
     )
     with pytest.raises(LLMAuthError):
         client.chat([{"role": "user", "content": "Hi"}])
 
-    fake_rl = _make_fake_gemini_module(lambda *a, **kw: (_ for _ in ()).throw(_FakeGeminiRateLimitError("429 quota exceeded")))
+    fake_rl = _make_fake_gemini_client(lambda *a, **kw: (_ for _ in ()).throw(_FakeGeminiRateLimitError("429 quota exceeded")))
     client_rl = LLMClient(
         config=LLMConfig(provider="gemini", gemini_api_key="AIza_ok", max_retries=1),
-        gemini_module=fake_rl,
+        gemini_client=fake_rl,
         sleep_fn=lambda _: None,
     )
     with pytest.raises(LLMRateLimitError):
         client_rl.chat([{"role": "user", "content": "Hi"}])
 
-    fake_to = _make_fake_gemini_module(lambda *a, **kw: (_ for _ in ()).throw(_FakeGeminiTimeoutError("DeadlineExceeded")))
+    fake_to = _make_fake_gemini_client(lambda *a, **kw: (_ for _ in ()).throw(_FakeGeminiTimeoutError("DEADLINE_EXCEEDED")))
     client_to = LLMClient(
         config=LLMConfig(provider="gemini", gemini_api_key="AIza_ok", max_retries=1),
-        gemini_module=fake_to,
+        gemini_client=fake_to,
         sleep_fn=lambda _: None,
     )
     with pytest.raises(LLMTimeoutError):
         client_to.chat([{"role": "user", "content": "Hi"}])
 
+    fake_srv = _make_fake_gemini_client(lambda *a, **kw: (_ for _ in ()).throw(_FakeGeminiServerError("ServiceUnavailable")))
+    client_srv = LLMClient(
+        config=LLMConfig(provider="gemini", gemini_api_key="AIza_ok", max_retries=1),
+        gemini_client=fake_srv,
+        sleep_fn=lambda _: None,
+    )
+    with pytest.raises(LLMConnectionError):
+        client_srv.chat([{"role": "user", "content": "Hi"}])
+
 
 def test_invalid_responses_and_json_extraction():
-    # Empty choices
     mock_groq = MagicMock()
     mock_groq.chat.completions.create.return_value = SimpleNamespace(choices=[])
     client = LLMClient(
@@ -344,7 +390,6 @@ def test_invalid_responses_and_json_extraction():
     with pytest.raises(LLMInvalidResponseError):
         client.chat([{"role": "user", "content": "Hi"}])
 
-    # Malformed tool arguments JSON
     bad_tc = SimpleNamespace(id="c1", function=SimpleNamespace(name="sql_tool", arguments="{bad json"))
     mock_groq.chat.completions.create.return_value = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content="", tool_calls=[bad_tc]))]
@@ -352,7 +397,6 @@ def test_invalid_responses_and_json_extraction():
     with pytest.raises(LLMInvalidResponseError):
         client.chat([{"role": "user", "content": "Hi"}])
 
-    # Markdown-fenced JSON parsing works cleanly
     mock_groq.chat.completions.create.return_value = SimpleNamespace(
         choices=[
             SimpleNamespace(
@@ -434,8 +478,8 @@ def test_neha_four_tool_schemas_translate_cleanly_for_gemini_and_groq():
         },
     ]
 
-    text_part = SimpleNamespace(text="Found 4 tools.", function_call=None)
-    fake_gemini = _make_fake_gemini_module(
+    text_part = SimpleNamespace(text="Found 4 tools.", function_call=None, thought=False)
+    fake_gemini = _make_fake_gemini_client(
         lambda *a, **kw: SimpleNamespace(
             candidates=[SimpleNamespace(content=SimpleNamespace(parts=[text_part]), finish_reason="STOP")],
             usage_metadata=None,
@@ -443,19 +487,19 @@ def test_neha_four_tool_schemas_translate_cleanly_for_gemini_and_groq():
     )
     gem_client = LLMClient(
         config=LLMConfig(provider="gemini", gemini_api_key="AIza_test"),
-        gemini_module=fake_gemini,
+        gemini_client=fake_gemini,
     )
     gem_res = gem_client.chat([{"role": "user", "content": "Find trains"}], tools=neha_schemas)
     assert gem_res.content == "Found 4 tools."
-    passed_tools = fake_gemini.GenerativeModel.call_args.kwargs["tools"]
-    decl_names = [fd.name for fd in passed_tools[0].function_declarations]
+    passed_cfg = fake_gemini.models.generate_content.call_args.kwargs["config"]
+    decl_names = [fd.name for fd in passed_cfg.tools[0].function_declarations]
     assert decl_names == ["station_search", "train_search", "train_details", "route_lookup"]
 
     mock_groq = MagicMock()
     mock_groq.chat.completions.create.return_value = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content="OK", tool_calls=[]), finish_reason="stop")],
         usage=None,
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
     )
     groq_client = LLMClient(
         config=LLMConfig(provider="groq", groq_api_key="gsk_test"),
@@ -478,7 +522,7 @@ def test_groq_multi_tool_call_and_tool_result_roundtrip():
     first_raw = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content="", tool_calls=[tc1, tc2]), finish_reason="tool_calls")],
         usage=None,
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
     )
     second_raw = SimpleNamespace(
         choices=[
@@ -488,7 +532,7 @@ def test_groq_multi_tool_call_and_tool_result_roundtrip():
             )
         ],
         usage=None,
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
     )
     mock_groq = MagicMock()
     mock_groq.chat.completions.create.side_effect = [first_raw, second_raw]
@@ -517,10 +561,10 @@ def test_groq_multi_tool_call_and_tool_result_roundtrip():
 
 
 def test_gemini_multi_tool_calls_invalid_response_and_connection_error():
-    fc1 = SimpleNamespace(text=None, function_call=SimpleNamespace(name="station_search", args={"query": "Jaipur"}))
-    fc2 = SimpleNamespace(text=None, function_call=SimpleNamespace(name="train_details", args={"train_number": "12315"}))
+    fc1 = SimpleNamespace(text=None, thought=False, function_call=SimpleNamespace(id="c1", name="station_search", args={"query": "Jaipur"}))
+    fc2 = SimpleNamespace(text=None, thought=False, function_call=SimpleNamespace(id="c2", name="train_details", args={"train_number": "12315"}))
 
-    fake_multi = _make_fake_gemini_module(
+    fake_multi = _make_fake_gemini_client(
         lambda *a, **kw: SimpleNamespace(
             candidates=[SimpleNamespace(content=SimpleNamespace(parts=[fc1, fc2]), finish_reason="STOP")],
             usage_metadata=None,
@@ -528,31 +572,29 @@ def test_gemini_multi_tool_calls_invalid_response_and_connection_error():
     )
     client = LLMClient(
         config=LLMConfig(provider="gemini", gemini_api_key="AIza_ok"),
-        gemini_module=fake_multi,
+        gemini_client=fake_multi,
     )
     res = client.chat([{"role": "user", "content": "Lookup Jaipur and 12315"}])
     assert len(res.tool_calls) == 2
     assert res.tool_calls[0].arguments == {"query": "Jaipur"}
     assert res.tool_calls[1].arguments == {"train_number": "12315"}
 
-    # Empty candidates raises LLMInvalidResponseError
-    fake_empty = _make_fake_gemini_module(
+    fake_empty = _make_fake_gemini_client(
         lambda *a, **kw: SimpleNamespace(candidates=[], usage_metadata=None)
     )
     client_empty = LLMClient(
         config=LLMConfig(provider="gemini", gemini_api_key="AIza_ok", max_retries=0),
-        gemini_module=fake_empty,
+        gemini_client=fake_empty,
     )
     with pytest.raises(LLMInvalidResponseError):
         client_empty.chat([{"role": "user", "content": "Hi"}])
 
-    # Network ConnectionError maps to LLMConnectionError
-    fake_conn = _make_fake_gemini_module(
+    fake_conn = _make_fake_gemini_client(
         lambda *a, **kw: (_ for _ in ()).throw(ConnectionError("Socket closed"))
     )
     client_conn = LLMClient(
         config=LLMConfig(provider="gemini", gemini_api_key="AIza_ok", max_retries=1),
-        gemini_module=fake_conn,
+        gemini_client=fake_conn,
         sleep_fn=lambda _: None,
     )
     with pytest.raises(LLMConnectionError):

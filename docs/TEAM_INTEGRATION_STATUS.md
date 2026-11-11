@@ -61,11 +61,11 @@
 
 ## 4. Record of Changes Made on `feature/christy-ai-assistant`
 
-- `helpdesk/llm.py`: Multi-provider Gemini (default) + Groq client, retry/backoff, exception mapping, secret redaction.
+- `helpdesk/llm.py`: Multi-provider Gemini (`google-genai` / `gemini-3.5-flash` default) + Groq (`openai/gpt-oss-120b` default) client, Gemini 3.x `thought_signature` caching, retry/backoff, exception mapping, secret redaction.
 - `helpdesk/prompts.py`: Modular grounded prompt builders, date/train precedence, 2016 snapshot scope.
 - `helpdesk/answer.py`: Deterministic `(doc, page)` allowlist validation, HTML `page: null`, SQL locking, `dont_know` enforcement.
 - `helpdesk/memory_adapter.py`: `MemoryBackendProtocol` adapter, token/message budgeting, atomic tool-turn preservation, ephemeral `InMemorySessionMock`.
 - `helpdesk/ai_assistant.py`: Multi-step tool-calling orchestration, `ToolRegistry` envelope compatibility (`ToolRegistryProtocol`), ungrounded-claim blocking.
-- `tests/`: 49 unit tests covering all modules, provider errors, memory lifecycle, and Neha's `ToolRegistry` envelope and schema translation across Gemini and Groq.
+- `tests/`: 50 unit tests covering all modules, `google-genai` migration, `thought_signature` replay, provider errors, memory lifecycle, and Neha's `ToolRegistry` envelope and schema translation across Gemini and Groq.
 - `docs/`: `CHRISTY_MODULE_GUIDE.md`, `CHRISTY_WORKFLOW.md`, `CHRISTY_INTERVIEW_PREPARATION.md`, and `TEAM_INTEGRATION_STATUS.md`.
 

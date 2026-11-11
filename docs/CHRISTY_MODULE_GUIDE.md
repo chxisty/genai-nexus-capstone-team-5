@@ -19,8 +19,8 @@
 | `requirements.txt` | Core Python dependencies for Member 1's modules and `pytest` | Implemented |
 
 ### Dependencies (`requirements.txt`)
-- `google-generativeai>=0.8.6` — Official Google Gemini SDK (default capstone provider).
-- `groq>=1.7.0` — Official Groq SDK (preferred fast-inference development provider).
+- `google-genai>=1.0.0` (verified on `3.1.0`) — Official Google GenAI SDK replacing deprecated `google-generativeai`.
+- `groq>=1.7.0` — Official Groq SDK (configurable fast-inference provider).
 - `python-dotenv>=1.0.0` — Loads local `.env` configuration without hardcoding keys.
 - `pydantic>=2.0.0` — Data validation dependency aligned with the project stack.
 - `pytest>=8.0.0` — Unit testing framework with mocked external API clients.
@@ -45,8 +45,8 @@
 - `LLMResponse(content: str, tool_calls: list[ToolCall], provider: str, model: str, finish_reason: str | None, usage: dict[str, int], raw_response: Any)` — Normalized response object with `@property has_tool_calls -> bool`.
 - `LLMConfig`:
   - `provider: str = "gemini"` (`"gemini"`, `"groq"`, or `"auto"`).
-  - `gemini_api_key: str`, `gemini_model: str = "gemini-2.5-flash"`.
-  - `groq_api_key: str`, `groq_model: str = "llama-3.3-70b-versatile"`.
+  - `gemini_api_key: str`, `gemini_model: str = "gemini-3.5-flash"`.
+  - `groq_api_key: str`, `groq_model: str = "openai/gpt-oss-120b"`.
   - `timeout_seconds: float = 30.0`, `max_retries: int = 3`, `initial_backoff_seconds: float = 1.0`, `backoff_multiplier: float = 2.0`, `max_backoff_seconds: float = 16.0`, `temperature: float = 0.1`, `max_tokens: int = 2048`.
   - `__repr__()` masks API keys as `<set>` or `<unset>`.
   - `from_env(env_file: str | Path | None = None, override: bool = False) -> LLMConfig`: Loads `.env` and builds config.
@@ -60,12 +60,14 @@
 - `extract_json_object(text: str) -> dict[str, Any]`: Extracts JSON cleanly even when wrapped in markdown ` ```json ` fences, raising `LLMInvalidResponseError` if no valid JSON object exists.
 
 #### `LLMClient`
-- `__init__(config: LLMConfig | None = None, *, provider=None, model=None, api_key=None, groq_client=None, gemini_module=None, sleep_fn=time.sleep, jitter_fn=random.uniform)`
+- `__init__(config: LLMConfig | None = None, *, provider=None, model=None, api_key=None, groq_client=None, gemini_client=None, gemini_module=None, gemini_types=None, sleep_fn=time.sleep, jitter_fn=random.uniform)`
   - Copies injected `config` before applying overrides so caller instances are not mutated.
   - Supports dependency injection of mock SDK clients and deterministic `sleep_fn` for fast unit tests.
 - `chat(messages, *, tools=None, response_format=None, temperature=None, max_tokens=None) -> LLMResponse`:
   - Dispatches to `_call_groq` or `_call_gemini` wrapped in `_execute_with_retry`.
-  - Translates OpenAI-style `tools` and `tool` / `assistant(tool_calls)` messages into Gemini `protos.Tool`, `protos.FunctionDeclaration`, `protos.FunctionCall`, and `protos.FunctionResponse` when using Gemini.
+  - Translates OpenAI-style `tools` and `tool` / `assistant(tool_calls)` messages into `google.genai.types` (`Tool`, `FunctionDeclaration`, `FunctionCall`, `FunctionResponse`) when using Gemini.
+  - Caches Gemini 3.x `thought_signature` bytes by `tool_call_id` in `_thought_signatures` so serialized multi-turn `AIAssistant` loops preserve required signatures without altering external interfaces.
+  - Filters out internal thinking summary parts (`part.thought == True`) when reading Gemini text outputs.
   - Only applies `response_mime_type="application/json"` on Gemini when `tools` are absent (avoiding the Gemini API restriction on combining JSON MIME mode with function calling).
 - `generate_json(messages, *, temperature=None, max_tokens=None) -> dict[str, Any]`:
   - Calls `chat(..., response_format="json")` and parses via `extract_json_object`.
@@ -180,13 +182,13 @@ Instead of one monolithic prompt, reusable constants represent distinct policy r
 
 | Dimension | Google Gemini (Default) | Groq (Configurable Alternative) |
 | :--- | :--- | :--- |
-| **SDK / Client** | `google-generativeai` (`genai.GenerativeModel`) | `groq` (`groq.Groq`) |
-| **Default Model** | `gemini-2.5-flash` (`GEMINI_MODEL`) | `llama-3.3-70b-versatile` (`GROQ_MODEL`) |
-| **System Prompt** | Extracted from `role="system"` messages into `system_instruction=` | Passed directly inside `messages` with `role="system"` |
-| **Tool Schemas** | Converted via `_convert_openai_tools_to_gemini()` into `protos.Tool` / `FunctionDeclaration` | Passed directly as OpenAI-compatible `tools` list |
-| **Tool Turns** | Converted to `Content(role="model", parts=[FunctionCall])` and `Content(role="user", parts=[FunctionResponse])` | Sent as `assistant` (`tool_calls`) + `role="tool"` (`tool_call_id`, `name`, `content`) |
+| **SDK / Client** | `google-genai` (`genai.Client` -> `client.models.generate_content`) | `groq` (`groq.Groq`) |
+| **Default Model** | `gemini-3.5-flash` (`GEMINI_MODEL`) | `openai/gpt-oss-120b` (`GROQ_MODEL`) |
+| **System Prompt** | Extracted from `role="system"` messages into `GenerateContentConfig(system_instruction=...)` | Passed directly inside `messages` with `role="system"` |
+| **Tool Schemas** | Converted via `_convert_openai_tools_to_gemini()` into `types.Tool` / `types.FunctionDeclaration` | Passed directly as OpenAI-compatible `tools` list |
+| **Tool Turns** | Converted to `types.Content(role="model", parts=[Part(function_call=..., thought_signature=...)])` and `types.Content(role="user", parts=[Part(function_response=...)])` | Sent as `assistant` (`tool_calls`) + `role="tool"` (`tool_call_id`, `name`, `content`) |
 | **JSON Mode Constraint** | `response_mime_type="application/json"` applied **only when `tools` is empty** | `response_format={"type": "json_object"}` applied when `tools` is empty |
-| **Error Mapping** | `Unauthenticated`/`PermissionDenied` -> `LLMAuthError`; `ResourceExhausted`/429 -> `LLMRateLimitError`; `DeadlineExceeded`/504 -> `LLMTimeoutError`; `ServiceUnavailable` -> `LLMConnectionError` | `AuthenticationError`/401 -> `LLMAuthError`; `RateLimitError`/429 -> `LLMRateLimitError`; `APITimeoutError` -> `LLMTimeoutError`; `APIConnectionError`/5xx -> `LLMConnectionError` |
+| **Error Mapping** | `401`/`403` -> `LLMAuthError`; `429`/`ResourceExhausted` -> `LLMRateLimitError`; `504`/`DeadlineExceeded`/`httpx` timeouts -> `LLMTimeoutError`; `500`/`502`/`503`/network -> `LLMConnectionError` | `AuthenticationError`/401 -> `LLMAuthError`; `RateLimitError`/429 -> `LLMRateLimitError`; `APITimeoutError` -> `LLMTimeoutError`; `APIConnectionError`/5xx -> `LLMConnectionError` |
 
 ---
 

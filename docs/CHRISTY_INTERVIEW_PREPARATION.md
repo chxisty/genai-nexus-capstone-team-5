@@ -17,8 +17,8 @@ The official GenAI Nexus capstone specification requires a pure terminal Python 
 - `data/` holds the 13 MB railway data pack (`rail_capstone_pack.zip` contents), which the brief specifies must be unzipped locally and never committed.
 
 ### 4. What is the difference between `LLMClient` using Gemini vs. Groq in `helpdesk/llm.py`?
-- **Google Gemini** (`google-generativeai`, default model `gemini-2.5-flash`) is the default provider when `LLM_PROVIDER` is unset or `gemini`, guaranteeing that automated evaluation runs using `GEMINI_API_KEY` work out of the box.
-- **Groq** (`groq`, default model `llama-3.3-70b-versatile`) is supported via `LLM_PROVIDER=groq` for fast inference during development and testing.
+- **Google Gemini** (`google-genai`, default model `gemini-3.5-flash`) is the default provider when `LLM_PROVIDER` is unset or `gemini`, guaranteeing that automated evaluation runs using `GEMINI_API_KEY` work out of the box.
+- **Groq** (`groq`, default model `openai/gpt-oss-120b`) is supported via `LLM_PROVIDER=groq` for fast inference during development and testing.
 - Both return a single normalized `LLMResponse` dataclass containing `content`, `tool_calls`, `provider`, `model`, `finish_reason`, and `usage`.
 
 ### 5. What does `dont_know: true` mean, and when does our code trigger it?
@@ -32,11 +32,11 @@ The official GenAI Nexus capstone specification requires a pure terminal Python 
 ## Intermediate Level Questions
 
 ### 6. How does `helpdesk/llm.py` normalize tool calling across both Groq and Gemini?
-Groq uses OpenAI-style schemas (`{"type": "function", "function": {...}}`) and message roles (`system`, `user`, `assistant` with `tool_calls`, `tool` with `tool_call_id`). Gemini's SDK (`google-generativeai`) instead requires:
-- `system_instruction` passed separately to `GenerativeModel(...)`.
-- Tool schemas converted recursively via `_convert_openai_tools_to_gemini()` into `genai.protos.Tool` and `genai.protos.FunctionDeclaration` with `genai.protos.Schema` / `genai.protos.Type`.
-- `assistant` tool requests converted to `Content(role="model", parts=[Part(function_call=...)])` and tool outputs converted to `Content(role="user", parts=[Part(function_response=...)])` via `_convert_messages_to_gemini()`.
-- Gemini `MapComposite` protobuf tool arguments converted to plain Python dicts via `_to_plain_python()`.
+Groq uses OpenAI-style schemas (`{"type": "function", "function": {...}}`) and message roles (`system`, `user`, `assistant` with `tool_calls`, `tool` with `tool_call_id`). Gemini's supported `google-genai` SDK (`client.models.generate_content`) instead requires:
+- `system_instruction` passed inside `types.GenerateContentConfig(...)`.
+- Tool schemas converted recursively via `_convert_openai_tools_to_gemini()` into `types.Tool` and `types.FunctionDeclaration` with `types.Schema` / `types.Type`.
+- `assistant` tool requests converted to `types.Content(role="model", parts=[types.Part(function_call=..., thought_signature=...)])` and tool outputs converted to `types.Content(role="user", parts=[types.Part(function_response=...)])` via `_convert_messages_to_gemini()`.
+- Gemini 3.x `thought_signature` bytes cached by `tool_call.id` inside `LLMClient._thought_signatures` so serialized OpenAI-style turns from `AIAssistant` preserve required signatures automatically.
 - Both SDK outputs are parsed into identical `ToolCall(id, name, arguments, raw_arguments)` objects inside `LLMResponse`.
 
 ### 7. Why didn't we silently fall back from Groq to Gemini if `GROQ_API_KEY` is missing?
@@ -88,10 +88,11 @@ Every unit test in `tests/` mocks the external SDK clients (`groq_client`, `gemi
 - `tests/test_memory_adapter.py` verifies missing-session safety, token budgeting, atomic block truncation, and duck-typed custom backends.
 - `tests/test_ai_assistant.py` verifies multi-step hybrid tool calling (doc + SQL), tool error recovery, ungrounded-reply blocking, and multi-turn follow-up context.
 
-### 16. What subtle Gemini SDK constraint did you handle in `LLMClient._call_gemini`?
-Two important real-world Gemini SDK details:
-1. `google-generativeai` raises a `400 InvalidArgument` error if `response_mime_type="application/json"` is combined with `tools` (function declarations). So `LLMClient` only sets `response_mime_type="application/json"` when `response_format == "json"` and `tools` is empty—while `AIAssistant` uses tools in the reasoning loop and then runs JSON synthesis without tools in `AnswerGenerator`.
-2. Gemini requires `FunctionResponse.response` to be a dictionary (`Struct`), not a bare list or string, so `_convert_messages_to_gemini()` wraps non-dict tool results as `{"result": ...}`.
+### 16. What subtle `google-genai` & Gemini 3.x SDK constraints did you handle in `LLMClient._call_gemini`?
+Three important real-world Gemini SDK details:
+1. `google-genai` rejects combining `response_mime_type="application/json"` with `tools` (function declarations). So `LLMClient` only sets `response_mime_type="application/json"` when `response_format == "json"` and `tools` is empty—while `AIAssistant` uses tools in the reasoning loop and then runs JSON synthesis without tools in `AnswerGenerator`.
+2. Gemini requires `FunctionResponse.response` to be a dictionary, not a bare list or string, so `_convert_messages_to_gemini()` wraps non-dict tool results as `{"result": ...}`.
+3. Gemini 3.x models return a `thought_signature` on `function_call` parts and reject multi-turn tool calls (`400 INVALID_ARGUMENT`) if `thought_signature` is omitted on replay, plus emit `part.thought=True` internal thought parts. `LLMClient` filters `part.thought=True` from user-visible text and caches `thought_signature` by `tool_call.id`. Also, we evaluated the Interactions API (`client.interactions.create`), which timed out during live testing and relies on stateful `previous_interaction_id` chains, so `client.models.generate_content` with `AIAssistant`'s manual tool loop was the right architectural choice.
 
 ### 17. How did you verify compatibility with Neha's tool module (`origin/feature/tool-calling`), and what edge case did that uncover?
 Inspecting Neha's `tools/registry.py` and `tools/railway_tools.py` uncovered three real integration nuances handled in `helpdesk/ai_assistant.py`:

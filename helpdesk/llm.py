@@ -1,9 +1,10 @@
 """Configurable Multi-Provider LLM Client for Railway Passenger Help Desk.
 
-Supports both Google Gemini (default for official capstone evaluation) and
-Groq (preferred fast-inference option for development), normalized behind a
-common interface with tool-calling translation, structured JSON extraction,
-transient retry with exponential backoff, and secret-safe logging.
+Supports both Google Gemini (via the official ``google-genai`` SDK, default for
+official capstone evaluation) and Groq (configurable alternative for development),
+normalized behind a common interface with tool-calling translation, Gemini 3.x
+``thought_signature`` preservation, structured JSON extraction, transient retry
+with exponential backoff, and secret-safe logging.
 """
 
 from __future__ import annotations
@@ -18,14 +19,13 @@ import re
 import time
 from typing import Any, Callable, Mapping, Sequence
 import uuid
-import warnings
 
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 SUPPORTED_PROVIDERS = ("gemini", "groq", "auto")
 
 _KEY_REDACTION_PATTERNS = (
@@ -88,6 +88,7 @@ class ToolCall:
     name: str
     arguments: dict[str, Any]
     raw_arguments: str = ""
+    thought_signature: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -271,36 +272,36 @@ def extract_json_object(text: str) -> dict[str, Any]:
         raise LLMInvalidResponseError("LLM response did not contain a valid JSON object.")
 
 
-def _normalize_json_type(json_type: str | None, protos: Any) -> Any:
+def _normalize_json_type(json_type: str | None, types_mod: Any) -> Any:
     mapping = {
-        "string": protos.Type.STRING,
-        "integer": protos.Type.INTEGER,
-        "number": protos.Type.NUMBER,
-        "boolean": protos.Type.BOOLEAN,
-        "array": protos.Type.ARRAY,
-        "object": protos.Type.OBJECT,
+        "string": types_mod.Type.STRING,
+        "integer": types_mod.Type.INTEGER,
+        "number": types_mod.Type.NUMBER,
+        "boolean": types_mod.Type.BOOLEAN,
+        "array": types_mod.Type.ARRAY,
+        "object": types_mod.Type.OBJECT,
     }
-    return mapping.get((json_type or "string").lower(), protos.Type.STRING)
+    return mapping.get((json_type or "string").lower(), types_mod.Type.STRING)
 
 
-def _json_schema_to_gemini_schema(schema: Mapping[str, Any], protos: Any) -> Any:
-    """Recursively convert an OpenAI/JSON Schema dict to a Gemini protos.Schema."""
+def _json_schema_to_gemini_schema(schema: Mapping[str, Any], types_mod: Any) -> Any:
+    """Recursively convert an OpenAI/JSON Schema dict to a google.genai.types.Schema."""
     raw_type = schema.get("type", "object")
     if isinstance(raw_type, list):
         non_null = [t for t in raw_type if t != "null"]
         raw_type = non_null[0] if non_null else "string"
 
-    proto_type = _normalize_json_type(raw_type, protos)
-    kwargs: dict[str, Any] = {"type": proto_type}
+    schema_type = _normalize_json_type(raw_type, types_mod)
+    kwargs: dict[str, Any] = {"type": schema_type}
     if schema.get("description"):
         kwargs["description"] = str(schema["description"])
     if schema.get("enum"):
         kwargs["enum"] = [str(item) for item in schema["enum"]]
 
-    if proto_type == protos.Type.OBJECT:
+    if schema_type == types_mod.Type.OBJECT:
         raw_props = schema.get("properties") or {}
         props = {
-            str(prop_name): _json_schema_to_gemini_schema(prop_schema, protos)
+            str(prop_name): _json_schema_to_gemini_schema(prop_schema, types_mod)
             for prop_name, prop_schema in raw_props.items()
             if isinstance(prop_schema, Mapping)
         }
@@ -308,21 +309,21 @@ def _json_schema_to_gemini_schema(schema: Mapping[str, Any], protos: Any) -> Any
             kwargs["properties"] = props
         if schema.get("required"):
             kwargs["required"] = [str(r) for r in schema["required"]]
-    elif proto_type == protos.Type.ARRAY:
+    elif schema_type == types_mod.Type.ARRAY:
         items_schema = schema.get("items")
         if isinstance(items_schema, Mapping):
-            kwargs["items"] = _json_schema_to_gemini_schema(items_schema, protos)
+            kwargs["items"] = _json_schema_to_gemini_schema(items_schema, types_mod)
         else:
-            kwargs["items"] = protos.Schema(type=protos.Type.STRING)
+            kwargs["items"] = types_mod.Schema(type=types_mod.Type.STRING)
 
-    return protos.Schema(**kwargs)
+    return types_mod.Schema(**kwargs)
 
 
 def _convert_openai_tools_to_gemini(
     tools: Sequence[Mapping[str, Any]] | None,
-    protos: Any,
+    types_mod: Any,
 ) -> list[Any] | None:
-    """Convert OpenAI-compatible tool declarations into Gemini Tool protos."""
+    """Convert OpenAI-compatible tool declarations into google.genai.types.Tool objects."""
     if not tools:
         return None
 
@@ -337,19 +338,18 @@ def _convert_openai_tools_to_gemini(
 
         fd_kwargs: dict[str, Any] = {"name": name, "description": description}
         if isinstance(params, Mapping) and (params.get("properties") or params.get("required")):
-            fd_kwargs["parameters"] = _json_schema_to_gemini_schema(params, protos)
-        declarations.append(protos.FunctionDeclaration(**fd_kwargs))
+            fd_kwargs["parameters"] = _json_schema_to_gemini_schema(params, types_mod)
+        declarations.append(types_mod.FunctionDeclaration(**fd_kwargs))
 
-    return [protos.Tool(function_declarations=declarations)] if declarations else None
+    return [types_mod.Tool(function_declarations=declarations)] if declarations else None
 
 
 def _to_plain_python(value: Any) -> Any:
-    """Recursively convert protobuf MapComposite / RepeatedComposite objects to plain Python."""
+    """Recursively convert SDK mapping/sequence containers into plain Python types."""
     if isinstance(value, Mapping):
         return {str(k): _to_plain_python(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_to_plain_python(v) for v in value]
-    # Protobuf RepeatedComposite behaves like sequence without inheriting list/tuple
     if hasattr(value, "__iter__") and not isinstance(value, (str, bytes, bytearray)):
         if hasattr(value, "items"):
             return {str(k): _to_plain_python(v) for k, v in value.items()}
@@ -412,16 +412,22 @@ def _sanitize_groq_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[
 
 def _convert_messages_to_gemini(
     messages: Sequence[Mapping[str, Any]],
-    protos: Any,
+    types_mod: Any,
+    thought_signatures: Mapping[str, bytes] | None = None,
 ) -> tuple[str | None, list[Any]]:
-    """Translate OpenAI-style chat messages into Gemini (system_instruction, contents)."""
+    """Translate OpenAI-style chat messages into Gemini (system_instruction, contents).
+
+    Preserves Gemini 3.x ``thought_signature`` bytes and ``FunctionCall.id`` /
+    ``FunctionResponse.id`` across serialized tool-calling turns.
+    """
+    sig_lookup = thought_signatures or {}
     system_parts: list[str] = []
     contents: list[Any] = []
     pending_tool_parts: list[Any] = []
 
     def flush_tool_parts() -> None:
         if pending_tool_parts:
-            contents.append(protos.Content(role="user", parts=list(pending_tool_parts)))
+            contents.append(types_mod.Content(role="user", parts=list(pending_tool_parts)))
             pending_tool_parts.clear()
 
     for msg in messages:
@@ -442,13 +448,15 @@ def _convert_messages_to_gemini(
             except (json.JSONDecodeError, TypeError):
                 response_payload = {"result": str(raw_content)}
 
+            fr_kwargs: dict[str, Any] = {
+                "name": tool_name,
+                "response": response_payload,
+            }
+            if msg.get("tool_call_id"):
+                fr_kwargs["id"] = str(msg["tool_call_id"])
+
             pending_tool_parts.append(
-                protos.Part(
-                    function_response=protos.FunctionResponse(
-                        name=tool_name,
-                        response=response_payload,
-                    )
-                )
+                types_mod.Part(function_response=types_mod.FunctionResponse(**fr_kwargs))
             )
             continue
 
@@ -457,12 +465,20 @@ def _convert_messages_to_gemini(
         if role == "assistant":
             parts: list[Any] = []
             if content_text:
-                parts.append(protos.Part(text=str(content_text)))
+                parts.append(types_mod.Part.from_text(text=str(content_text)))
             for tc in msg.get("tool_calls") or []:
+                tc_id = ""
+                tc_sig: bytes | None = None
                 if isinstance(tc, ToolCall):
+                    tc_id = tc.id
                     tc_name = tc.name
                     tc_args = tc.arguments
+                    tc_sig = tc.thought_signature
                 elif isinstance(tc, Mapping):
+                    tc_id = str(tc.get("id", ""))
+                    raw_sig = tc.get("thought_signature")
+                    if isinstance(raw_sig, (bytes, bytearray)):
+                        tc_sig = bytes(raw_sig)
                     fn = tc.get("function", tc)
                     tc_name = str(fn.get("name", ""))
                     raw_args = fn.get("arguments", {})
@@ -477,23 +493,28 @@ def _convert_messages_to_gemini(
                         tc_args = {}
                 else:
                     continue
+
+                if tc_sig is None and tc_id and tc_id in sig_lookup:
+                    tc_sig = sig_lookup[tc_id]
+
                 if tc_name:
-                    parts.append(
-                        protos.Part(
-                            function_call=protos.FunctionCall(
-                                name=tc_name,
-                                args=tc_args,
-                            )
-                        )
-                    )
+                    fc_kwargs: dict[str, Any] = {"name": tc_name, "args": tc_args}
+                    if tc_id:
+                        fc_kwargs["id"] = tc_id
+                    part_kwargs: dict[str, Any] = {
+                        "function_call": types_mod.FunctionCall(**fc_kwargs)
+                    }
+                    if tc_sig is not None:
+                        part_kwargs["thought_signature"] = tc_sig
+                    parts.append(types_mod.Part(**part_kwargs))
             if not parts:
-                parts.append(protos.Part(text=""))
-            contents.append(protos.Content(role="model", parts=parts))
+                parts.append(types_mod.Part.from_text(text=""))
+            contents.append(types_mod.Content(role="model", parts=parts))
         else:
             contents.append(
-                protos.Content(
+                types_mod.Content(
                     role="user",
-                    parts=[protos.Part(text=str(content_text or ""))],
+                    parts=[types_mod.Part.from_text(text=str(content_text or ""))],
                 )
             )
 
@@ -503,10 +524,11 @@ def _convert_messages_to_gemini(
 
 
 class LLMClient:
-    """Unified multi-provider LLM client supporting Gemini and Groq.
+    """Unified multi-provider LLM client supporting Gemini (google-genai) and Groq.
 
     Handles provider resolution, lazy SDK client setup, tool-calling normalization,
-    retry with exponential backoff on transient failures, and secret-safe error mapping.
+    Gemini 3.x thought_signature caching, retry with exponential backoff on transient
+    failures, and secret-safe error mapping.
     """
 
     def __init__(
@@ -517,7 +539,9 @@ class LLMClient:
         model: str | None = None,
         api_key: str | None = None,
         groq_client: Any = None,
+        gemini_client: Any = None,
         gemini_module: Any = None,
+        gemini_types: Any = None,
         sleep_fn: Callable[[float], None] = time.sleep,
         jitter_fn: Callable[[float, float], float] = random.uniform,
     ) -> None:
@@ -540,9 +564,14 @@ class LLMClient:
 
         self.model = self.config.active_model(self.provider)
         self._groq_client = groq_client
+        self._gemini_client = gemini_client
         self._gemini_module = gemini_module
+        self._gemini_types = gemini_types
         self._sleep = sleep_fn
         self._jitter = jitter_fn
+        # Cache thought_signature bytes by tool_call_id so serialized OpenAI-style
+        # assistant turns preserve Gemini 3.x signatures across AIAssistant loops.
+        self._thought_signatures: dict[str, bytes] = {}
 
         logger.info("Initialized LLMClient with provider=%s, model=%s", self.provider, self.model)
 
@@ -565,21 +594,42 @@ class LLMClient:
             )
         return self._groq_client
 
-    def _get_gemini_module(self) -> Any:
-        api_key = self.config.active_api_key("gemini")
-        if self._gemini_module is None:
+    def _get_gemini_types(self) -> Any:
+        if self._gemini_types is None:
             try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", FutureWarning)
-                    import google.generativeai as genai
+                from google.genai import types
             except ImportError as exc:
                 raise LLMConfigurationError(
-                    "The 'google-generativeai' package is not installed. "
-                    "Run: pip install google-generativeai"
+                    "The 'google-genai' package is not installed. Run: pip install google-genai"
                 ) from exc
-            self._gemini_module = genai
-        self._gemini_module.configure(api_key=api_key)
-        return self._gemini_module
+            self._gemini_types = types
+        return self._gemini_types
+
+    def _get_gemini_client(self) -> Any:
+        api_key = self.config.active_api_key("gemini")
+        types_mod = self._get_gemini_types()
+        if self._gemini_client is None:
+            if self._gemini_module is not None:
+                genai_mod = self._gemini_module
+            else:
+                try:
+                    from google import genai
+                except ImportError as exc:
+                    raise LLMConfigurationError(
+                        "The 'google-genai' package is not installed. Run: pip install google-genai"
+                    ) from exc
+                genai_mod = genai
+
+            timeout_ms = int(max(1000, round(self.config.timeout_seconds * 1000)))
+            http_options = types_mod.HttpOptions(
+                timeout=timeout_ms,
+                retry_options=types_mod.HttpRetryOptions(attempts=1),
+            )
+            self._gemini_client = genai_mod.Client(
+                api_key=api_key,
+                http_options=http_options,
+            )
+        return self._gemini_client
 
     def chat(
         self,
@@ -764,32 +814,35 @@ class LLMClient:
         temperature: float,
         max_tokens: int,
     ) -> LLMResponse:
-        genai = self._get_gemini_module()
-        protos = genai.protos
-        system_instruction, contents = _convert_messages_to_gemini(messages, protos)
-        gemini_tools = _convert_openai_tools_to_gemini(tools, protos)
+        client = self._get_gemini_client()
+        types_mod = self._get_gemini_types()
 
-        gen_cfg_kwargs: dict[str, Any] = {
+        system_instruction, contents = _convert_messages_to_gemini(
+            messages,
+            types_mod,
+            thought_signatures=self._thought_signatures,
+        )
+        gemini_tools = _convert_openai_tools_to_gemini(tools, types_mod)
+
+        cfg_kwargs: dict[str, Any] = {
             "temperature": temperature,
             "max_output_tokens": max_tokens,
         }
-        # Gemini API rejects combining response_mime_type='application/json' with tools.
-        if response_format == "json" and not gemini_tools:
-            gen_cfg_kwargs["response_mime_type"] = "application/json"
-
-        generation_config = genai.types.GenerationConfig(**gen_cfg_kwargs)
-        model_kwargs: dict[str, Any] = {"model_name": self.model}
         if system_instruction:
-            model_kwargs["system_instruction"] = system_instruction
+            cfg_kwargs["system_instruction"] = system_instruction
         if gemini_tools:
-            model_kwargs["tools"] = gemini_tools
+            cfg_kwargs["tools"] = gemini_tools
+        elif response_format == "json":
+            # Gemini API rejects combining response_mime_type='application/json' with tools.
+            cfg_kwargs["response_mime_type"] = "application/json"
+
+        config = types_mod.GenerateContentConfig(**cfg_kwargs)
 
         try:
-            model = genai.GenerativeModel(**model_kwargs)
-            raw = model.generate_content(
-                contents,
-                generation_config=generation_config,
-                request_options={"timeout": self.config.timeout_seconds},
+            raw = client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=config,
             )
         except Exception as exc:
             raise self._map_gemini_exception(exc) from exc
@@ -809,6 +862,10 @@ class LLMClient:
         parsed_tool_calls: list[ToolCall] = []
 
         for idx, part in enumerate(parts):
+            # Ignore internal Gemini 3.x thinking summary parts when extracting final text.
+            if getattr(part, "thought", False):
+                continue
+
             part_text = getattr(part, "text", None)
             if part_text:
                 text_segments.append(str(part_text))
@@ -822,12 +879,21 @@ class LLMClient:
                     raise LLMInvalidResponseError(
                         f"Gemini function_call args for {fc_name!r} could not be converted to dict."
                     )
+                call_id = str(
+                    getattr(fc, "id", None) or f"gemini_call_{idx}_{uuid.uuid4().hex[:6]}"
+                )
+                raw_sig = getattr(part, "thought_signature", None)
+                sig = bytes(raw_sig) if isinstance(raw_sig, (bytes, bytearray)) else None
+                if sig is not None:
+                    self._thought_signatures[call_id] = sig
+
                 parsed_tool_calls.append(
                     ToolCall(
-                        id=f"gemini_call_{idx}_{uuid.uuid4().hex[:6]}",
+                        id=call_id,
                         name=str(fc_name),
                         arguments=plain_args,
                         raw_arguments=json.dumps(plain_args, ensure_ascii=False),
+                        thought_signature=sig,
                     )
                 )
 
@@ -898,20 +964,40 @@ class LLMClient:
             or "permission denied" in lower
         ):
             return LLMAuthError(f"Gemini authentication failed: {msg}")
-        if cls_name == "ResourceExhausted" or code == 429 or "429" in lower or "quota" in lower:
+        if (
+            cls_name == "ResourceExhausted"
+            or code == 429
+            or "429" in lower
+            or "resource_exhausted" in lower
+            or "quota" in lower
+        ):
             return LLMRateLimitError(f"Gemini rate limit exceeded: {msg}")
         if (
-            cls_name == "DeadlineExceeded"
+            cls_name in {
+                "DeadlineExceeded",
+                "ReadTimeout",
+                "ConnectTimeout",
+                "WriteTimeout",
+                "PoolTimeout",
+                "APITimeoutError",
+            }
             or code == 504
             or isinstance(exc, TimeoutError)
             or "deadline exceeded" in lower
             or "deadlineexceeded" in lower
+            or "deadline_exceeded" in lower
             or "timed out" in lower
             or "timeout" in lower
         ):
             return LLMTimeoutError(f"Gemini request timed out: {msg}")
         if (
-            cls_name in {"ServiceUnavailable", "InternalServerError"}
+            cls_name in {
+                "ServiceUnavailable",
+                "InternalServerError",
+                "ConnectError",
+                "NetworkError",
+                "RemoteProtocolError",
+            }
             or code in {500, 502, 503}
             or isinstance(exc, (ConnectionError, OSError))
             or "connection" in lower

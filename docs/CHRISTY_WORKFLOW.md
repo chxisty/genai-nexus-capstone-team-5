@@ -41,7 +41,7 @@ flowchart TD
    - Appends bounded prior conversation turns and the current passenger question.
 3. **Multi-Step Tool-Calling Loop (`helpdesk/ai_assistant.py` + `helpdesk/llm.py`)**:
    - Calls `LLMClient.chat(messages, tools=tool_schemas)` up to `max_tool_steps` iterations.
-   - `LLMClient` translates OpenAI-style schemas and `tool` history into Gemini `protos` (when using Gemini) or passes them directly (when using Groq).
+   - `LLMClient` translates OpenAI-style schemas and `tool` history into `google.genai.types` (`Tool`, `FunctionDeclaration`, `Content`, `Part` with Gemini 3.x `thought_signature` preservation) when using Gemini, or passes them directly when using Groq.
    - If the LLM emits `ToolCall` requests, `AIAssistant._invoke_tool` executes each tool safely via Neha's `tool_executor` (which routes to Krishna's document search or read-only SQLite DB).
    - `_collect_evidence_from_tool_result` captures normalized document chunks, source `(doc, page)` pairs, DB rows, and executed `SELECT` SQL strings.
    - Tool calls and tool results are recorded in `MemoryAdapter` and fed back into `messages` so the LLM can either perform additional lookups (e.g., hybrid schedule + refund question) or complete reasoning.
@@ -164,9 +164,9 @@ flowchart TD
 
 When demonstrating Member 1 during the live presentation or viva, walk through these 5 steps:
 
-1. **Multi-Provider Initialization (`helpdesk/llm.py`):** Show `.env.example` and explain how `LLMConfig.from_env()` defaults to Gemini (`gemini-2.5-flash`) for automated capstone evaluation while allowing instant switching to Groq (`llama-3.3-70b-versatile`) via `LLM_PROVIDER=groq`.
+1. **Multi-Provider Initialization (`helpdesk/llm.py`):** Show `.env.example` and explain how `LLMConfig.from_env()` defaults to Gemini (`gemini-3.5-flash` via `google-genai`) for capstone evaluation while allowing instant switching to Groq (`openai/gpt-oss-120b`) via `LLM_PROVIDER=groq`.
 2. **Modular System Prompts (`helpdesk/prompts.py`):** Point out how `build_assistant_system_prompt()` composes evidence-only grounding, circular date precedence, and the 2016 snapshot scope without embedding any test answers.
 3. **Tool-Calling Loop (`helpdesk/ai_assistant.py`):** Explain how `AIAssistant.process_question()` runs up to `max_tool_steps`, dispatches calls to Neha's `ToolRegistry.call()`, unwraps `{"status": "success", "result": ...}`, and collects evidence across multiple tools.
 4. **Memory Budgeting (`helpdesk/memory_adapter.py`):** Explain how `MemoryAdapter` connects to Prasad's session store via `MemoryBackendProtocol`, enforces `max_messages` and `max_tokens`, and groups `assistant(tool_calls)` + `tool` pairs atomically.
-5. **Grounded Validation (`helpdesk/answer.py`) & Verification (`pytest`):** Show how `AnswerGenerator` validates `(doc, page)` citations against an allowlist, normalizes HTML pages to `null`, locks `sql` to real executed SQL only, and run `.\.venv\Scripts\python.exe -m pytest -v` to demonstrate all 49 unit tests passing.
+5. **Grounded Validation (`helpdesk/answer.py`) & Verification (`pytest`):** Show how `AnswerGenerator` validates `(doc, page)` citations against an allowlist, normalizes HTML pages to `null`, locks `sql` to real executed SQL only, and run `.\.venv\Scripts\python.exe -m pytest -v` to demonstrate all 50 unit tests passing.
 

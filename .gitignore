@@ -1,5 +1,5 @@
-<<<<<<< HEAD
-# Environment & secrets (NEVER commit .env or API keys)
+
+# Environment and secrets
 .env
 .env.*
 !.env.example
@@ -18,18 +18,11 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Railway capstone dataset (never commit data/)
+# Railway dataset and local conversation history
 data/
 
-# IDE / OS artifacts
+# IDE and operating system files
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-
-=======
-__pycache__/
-*.pyc
-.venv/
-.env
->>>>>>> origin/feature/tool-calling

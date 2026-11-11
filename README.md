@@ -107,3 +107,66 @@ Each function must:
 | Exception safety               | Catches and wraps function exceptions      |
 | Swap-in real implementations   | `registry.register(name, func)` — no code changes |
 | No external dependencies       | Python standard library only               |
+
+
+---
+
+## Member 2 — Railway Database & Data Management
+
+### Database Overview
+
+The project uses a SQLite railway timetable database stored at:
+
+`data/rail_timetable.db`
+
+The database contains four tables:
+
+| Table | Description |
+|---|---|
+| `stations` | Station codes, names, locations and details |
+| `trains` | Train numbers, names, routes and available classes |
+| `train_types` | Train type codes and their meanings |
+| `schedules` | Scheduled stops, arrival/departure times and halt details |
+
+### Database Tools
+
+Implementation: `tools/database_tools.py`
+
+The module provides four database-backed functions
+:
+
+| Function | Purpose |
+|---|---|
+| `search_stations(query)` | Search stations by name or code |
+| `search_trains(source, destination, date)` | Find trains between two stations |
+| `get_train_details(train_number)` | Retrieve train information and classes |
+| `get_train_route(train_number)` | Retrieve the scheduled route and stops |
+
+### Registering Database Tools
+
+Import and register the database functions using:
+
+```python
+from tools.database_tools import register_database_tools
+
+register_database_tools(registry)
+
+```
+
+This registers the real database-backed implementations with the existing `ToolRegistry`.
+
+### Testing
+
+Run the complete test suite:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Database-specific tests are located in `tests/test_database_tools.py`.
+
+The current test suite contains 26 tests, covering both the original tool-calling module and the database functions.
+
+### Database Limitations
+
+The database contains a static railway timetable snapshot. It does not provide live train running status, real-time seat availability, ticket fares or date-based service validation. The requested date in train search is recorded but is not used to verify operating days.

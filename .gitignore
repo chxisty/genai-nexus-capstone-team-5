@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Environment & secrets (NEVER commit .env or API keys)
 .env
 .env.*
@@ -26,3 +27,9 @@ data/
 .DS_Store
 Thumbs.db
 
+=======
+__pycache__/
+*.pyc
+.venv/
+.env
+>>>>>>> origin/feature/tool-calling

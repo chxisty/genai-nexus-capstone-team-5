@@ -66,6 +66,6 @@
 - `helpdesk/answer.py`: Deterministic `(doc, page)` allowlist validation, HTML `page: null`, SQL locking, `dont_know` enforcement.
 - `helpdesk/memory_adapter.py`: `MemoryBackendProtocol` adapter, token/message budgeting, atomic tool-turn preservation, ephemeral `InMemorySessionMock`.
 - `helpdesk/ai_assistant.py`: Multi-step tool-calling orchestration, `ToolRegistry` envelope compatibility (`ToolRegistryProtocol`), ungrounded-claim blocking.
-- `tests/`: 43 unit tests covering all modules plus Neha's `ToolRegistry` envelope and schema translation across Gemini and Groq.
+- `tests/`: 49 unit tests covering all modules, provider errors, memory lifecycle, and Neha's `ToolRegistry` envelope and schema translation across Gemini and Groq.
 - `docs/`: `CHRISTY_MODULE_GUIDE.md`, `CHRISTY_WORKFLOW.md`, `CHRISTY_INTERVIEW_PREPARATION.md`, and `TEAM_INTEGRATION_STATUS.md`.
 

@@ -506,3 +506,105 @@ def test_neha_train_search_and_route_lookup_payloads_and_protocol():
     assert res["sources"] == []
     assert res["sql"] == "SELECT number, name FROM trains WHERE number = '12315';"
     assert "12315" in res["answer"]
+
+
+def test_neha_train_details_success_via_mock_registry():
+    """Verify train_details structured payload using a mock matching ToolRegistry.call()."""
+    registry = _FakeNehaRegistry(
+        lambda name, args: {
+            "status": "success",
+            "tool": "train_details",
+            "result": {
+                "train_number": "12951",
+                "name": "Mumbai Central-New Delhi Rajdhani Express",
+                "type": "Raj",
+                "classes": ["1A", "2A", "3A"],
+                "sql": "SELECT * FROM trains WHERE number = '12951';",
+            },
+        }
+    )
+    llm = _make_mock_llm(
+        chat_side_effect=[
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="t1", name="train_details", arguments={"train_number": "12951"})],
+            ),
+            LLMResponse(
+                content=(
+                    '{"answer": "Train 12951 is the Mumbai Central-New Delhi Rajdhani Express with 1A, 2A, and 3A classes.", '
+                    '"sources": [], "dont_know": false}'
+                )
+            ),
+        ]
+    )
+    assistant = AIAssistant(llm, tool_executor=registry, tool_schemas=MOCK_TOOL_SCHEMAS)
+    res = assistant.ask("Give me details of train 12951.")
+
+    assert res["dont_know"] is False
+    assert res["sources"] == []
+    assert res["sql"] == "SELECT * FROM trains WHERE number = '12951';"
+    assert "12951" in res["answer"]
+
+
+def test_neha_standalone_route_lookup_via_mock_registry():
+    """Verify standalone route_lookup using a mock matching ToolRegistry.call()."""
+    registry = _FakeNehaRegistry(
+        lambda name, args: {
+            "status": "success",
+            "tool": "route_lookup",
+            "result": {
+                "train_number": "12002",
+                "stops": [
+                    {"station": "New Delhi", "arrival": None, "departure": "06:15"},
+                    {"station": "Agra Cantt", "arrival": "08:06", "departure": "08:11"},
+                ],
+                "sql": "SELECT station_code, arrival, departure FROM stops WHERE train_number = '12002';",
+            },
+        }
+    )
+    llm = _make_mock_llm(
+        chat_side_effect=[
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="t1", name="route_lookup", arguments={"train_number": "12002"})],
+            ),
+            LLMResponse(
+                content=(
+                    '{"answer": "Train 12002 starts at New Delhi (06:15) and stops at Agra Cantt (08:06-08:11).", '
+                    '"sources": [], "dont_know": false}'
+                )
+            ),
+        ]
+    )
+    assistant = AIAssistant(llm, tool_executor=registry, tool_schemas=MOCK_TOOL_SCHEMAS)
+    res = assistant.ask("What is the route of train 12002?")
+
+    assert res["dont_know"] is False
+    assert res["sources"] == []
+    assert res["sql"] == "SELECT station_code, arrival, departure FROM stops WHERE train_number = '12002';"
+
+
+def test_neha_station_search_empty_matches_yields_dont_know():
+    """Verify empty station_search matches result in honest dont_know=True."""
+    registry = _FakeNehaRegistry(
+        lambda name, args: {
+            "status": "success",
+            "tool": "station_search",
+            "result": {"query": "Atlantis", "matches": []},
+        }
+    )
+    llm = _make_mock_llm(
+        chat_side_effect=[
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="t1", name="station_search", arguments={"query": "Atlantis"})],
+            ),
+            LLMResponse(content="I don't know. No matching station was found for Atlantis."),
+        ]
+    )
+    assistant = AIAssistant(llm, tool_executor=registry, tool_schemas=MOCK_TOOL_SCHEMAS)
+    res = assistant.ask("What is the station code for Atlantis?")
+
+    assert res["dont_know"] is True
+    assert res["sources"] == []
+    assert res["sql"] is None

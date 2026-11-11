@@ -51,8 +51,26 @@ def test_new_and_existing_session_with_default_mock():
 def test_missing_session_returns_empty_history():
     adapter = MemoryAdapter()
     assert adapter.has_session("nonexistent") is False
+    assert adapter.has_session("") is False
+    assert adapter.has_session("   ") is False
     assert adapter.get_raw_history("nonexistent") == []
+    assert adapter.get_raw_history(None) == []
+    assert adapter.get_raw_history("   ") == []
     assert adapter.get_context_messages("nonexistent") == []
+    assert adapter.get_context_messages(None) == []
+    # Clearing missing or blank session must not fail
+    adapter.clear_session(None)
+    adapter.clear_session("nonexistent")
+
+
+def test_clear_session_on_default_mock():
+    adapter = MemoryAdapter()
+    sid = adapter.ensure_session("clear_me")
+    adapter.record_user_message(sid, "Hello")
+    assert len(adapter.get_raw_history(sid)) == 1
+    adapter.clear_session(sid)
+    assert adapter.has_session(sid) is False
+    assert adapter.get_raw_history(sid) == []
 
 
 def test_tool_call_history_and_atomic_truncation():

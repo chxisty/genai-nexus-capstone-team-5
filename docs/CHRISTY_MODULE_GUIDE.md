@@ -141,7 +141,9 @@ Instead of one monolithic prompt, reusable constants represent distinct policy r
 
 ### 2.5 `helpdesk/ai_assistant.py` — AI Assistant Orchestrator
 
-#### `ToolExecutorProtocol` & `AIAssistant`
+#### `ToolExecutorProtocol`, `ToolRegistryProtocol` & `AIAssistant`
+- `ToolExecutorProtocol`: runtime-checkable protocol defining `execute(tool_name, arguments)`.
+- `ToolRegistryProtocol`: runtime-checkable protocol matching Member 3 (Neha)'s `ToolRegistry.call(tool_name, arguments)`.
 - `__init__(llm_client, *, tool_executor=None, tool_schemas=None, memory_adapter=None, answer_generator=None, max_tool_steps=5, extra_system_instructions=None)`
 - `ask(question: str, *, session_id: str | None = None) -> dict[str, Any]` (alias for `process_question`)
 - `process_question(question: str, *, session_id: str | None = None) -> dict[str, Any]`:
@@ -171,3 +173,46 @@ Instead of one monolithic prompt, reusable constants represent distinct policy r
    - Provide a store implementing `MemoryBackendProtocol` (`create_session`, `has_session`, `get_history`, `add_message`, `clear_session`), passed to `MemoryAdapter(backend=prasad_store)`.
 4. **Member 5 (Ram — `helpdesk/pipeline.py`, `ask.py`, `run_questions.py`):**
    - Instantiate `LLMClient`, wire Neha's `tool_executor` + `tool_schemas` and Prasad's `MemoryAdapter(backend=...)` into `AIAssistant`, and delegate `ask(question)` directly to `assistant.ask(question)`.
+
+---
+
+## 4. Groq vs. Gemini Implementation Comparison
+
+| Dimension | Google Gemini (Default) | Groq (Configurable Alternative) |
+| :--- | :--- | :--- |
+| **SDK / Client** | `google-generativeai` (`genai.GenerativeModel`) | `groq` (`groq.Groq`) |
+| **Default Model** | `gemini-2.5-flash` (`GEMINI_MODEL`) | `llama-3.3-70b-versatile` (`GROQ_MODEL`) |
+| **System Prompt** | Extracted from `role="system"` messages into `system_instruction=` | Passed directly inside `messages` with `role="system"` |
+| **Tool Schemas** | Converted via `_convert_openai_tools_to_gemini()` into `protos.Tool` / `FunctionDeclaration` | Passed directly as OpenAI-compatible `tools` list |
+| **Tool Turns** | Converted to `Content(role="model", parts=[FunctionCall])` and `Content(role="user", parts=[FunctionResponse])` | Sent as `assistant` (`tool_calls`) + `role="tool"` (`tool_call_id`, `name`, `content`) |
+| **JSON Mode Constraint** | `response_mime_type="application/json"` applied **only when `tools` is empty** | `response_format={"type": "json_object"}` applied when `tools` is empty |
+| **Error Mapping** | `Unauthenticated`/`PermissionDenied` -> `LLMAuthError`; `ResourceExhausted`/429 -> `LLMRateLimitError`; `DeadlineExceeded`/504 -> `LLMTimeoutError`; `ServiceUnavailable` -> `LLMConnectionError` | `AuthenticationError`/401 -> `LLMAuthError`; `RateLimitError`/429 -> `LLMRateLimitError`; `APITimeoutError` -> `LLMTimeoutError`; `APIConnectionError`/5xx -> `LLMConnectionError` |
+
+---
+
+## 5. Practical Usage & Testing Examples
+
+### Wiring `AIAssistant` with `ToolRegistry` and `MemoryAdapter`
+```python
+from helpdesk import AIAssistant, LLMClient, MemoryAdapter
+
+llm = LLMClient()  # Reads LLM_PROVIDER, GEMINI_API_KEY / GROQ_API_KEY from .env
+memory = MemoryAdapter()  # Inject Prasad's backend: MemoryAdapter(backend=prasad_store)
+
+assistant = AIAssistant(
+    llm_client=llm,
+    tool_executor=neha_registry,   # Instance of tools.registry.ToolRegistry
+    tool_schemas=neha_tool_schemas,  # tools.schemas.TOOL_SCHEMAS (+ doc search schema)
+    memory_adapter=memory,
+)
+
+result = assistant.ask("Which trains run from JP to UDZ?", session_id="demo_1")
+# {"answer": "...", "sources": [...], "sql": "SELECT ...", "dont_know": false}
+```
+
+### Running the Automated Test Suite
+```powershell
+cd "C:\Users\DELL\Documents\Fellowship program\rail_assist"
+.\.venv\Scripts\python.exe -m pytest -v
+```
+*(No API key required; all unit tests mock external LLM/tool/memory dependencies.)*

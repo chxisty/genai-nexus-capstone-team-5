@@ -93,3 +93,9 @@ Two important real-world Gemini SDK details:
 1. `google-generativeai` raises a `400 InvalidArgument` error if `response_mime_type="application/json"` is combined with `tools` (function declarations). So `LLMClient` only sets `response_mime_type="application/json"` when `response_format == "json"` and `tools` is empty—while `AIAssistant` uses tools in the reasoning loop and then runs JSON synthesis without tools in `AnswerGenerator`.
 2. Gemini requires `FunctionResponse.response` to be a dictionary (`Struct`), not a bare list or string, so `_convert_messages_to_gemini()` wraps non-dict tool results as `{"result": ...}`.
 
+### 17. How did you verify compatibility with Neha's tool module (`origin/feature/tool-calling`), and what edge case did that uncover?
+Inspecting Neha's `tools/registry.py` and `tools/railway_tools.py` uncovered three real integration nuances handled in `helpdesk/ai_assistant.py`:
+1. `ToolRegistry` uses `.call(tool_name, arguments)` returning `{"status": "success", "tool": ..., "result": {...}}` (or `"status": "error"`), so `AIAssistant` supports `.call()` via `ToolRegistryProtocol` and unwraps the `"result"` envelope.
+2. `station_search` returns `{"query": "New Delhi", "matches": [...]}`—using `"query"` for a search string rather than SQL and `"matches"` for station rows rather than PDF chunks. `_collect_mapping_payload()` uses `_looks_like_sql()` (`SELECT ` / `WITH `) and `_looks_like_doc_chunk()` so station search text never leaks into `"sql"` or `"sources"`.
+3. We also identified two items to coordinate with Neha and Krishna without editing their branch: making `date` optional on `train_search` (for the 2016 snapshot) and adding a document-search schema plus `"sql"` metadata on real DB tool outputs.
+

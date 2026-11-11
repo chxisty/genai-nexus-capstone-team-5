@@ -291,7 +291,7 @@ class MemoryAdapter:
         for entry in raw:
             role = str(entry.get("role", "")).lower()
             if not include_tool_history:
-                if role == "tool" or (role == "assistant" and entry.get("tool_calls") and not entry.get("content")):
+                if role == "tool" or (role == "assistant" and entry.get("tool_calls")):
                     continue
                 if role not in {"user", "assistant"}:
                     continue

@@ -464,3 +464,96 @@ def test_neha_four_tool_schemas_translate_cleanly_for_gemini_and_groq():
     groq_res = groq_client.chat([{"role": "user", "content": "Find trains"}], tools=neha_schemas)
     assert groq_res.content == "OK"
     assert mock_groq.chat.completions.create.call_args.kwargs["tools"] == neha_schemas
+
+
+def test_groq_multi_tool_call_and_tool_result_roundtrip():
+    tc1 = SimpleNamespace(
+        id="call_a",
+        function=SimpleNamespace(name="station_search", arguments='{"query": "Jaipur"}'),
+    )
+    tc2 = SimpleNamespace(
+        id="call_b",
+        function=SimpleNamespace(name="station_search", arguments='{"query": "Udaipur"}'),
+    )
+    first_raw = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="", tool_calls=[tc1, tc2]), finish_reason="tool_calls")],
+        usage=None,
+        model="llama-3.3-70b-versatile",
+    )
+    second_raw = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="Jaipur is JP and Udaipur City is UDZ.", tool_calls=[]),
+                finish_reason="stop",
+            )
+        ],
+        usage=None,
+        model="llama-3.3-70b-versatile",
+    )
+    mock_groq = MagicMock()
+    mock_groq.chat.completions.create.side_effect = [first_raw, second_raw]
+
+    client = LLMClient(
+        config=LLMConfig(provider="groq", groq_api_key="gsk_test"),
+        groq_client=mock_groq,
+    )
+    res1 = client.chat([{"role": "user", "content": "Codes for Jaipur and Udaipur?"}])
+    assert len(res1.tool_calls) == 2
+    assert [tc.name for tc in res1.tool_calls] == ["station_search", "station_search"]
+
+    res2 = client.chat(
+        [
+            {"role": "user", "content": "Codes for Jaipur and Udaipur?"},
+            {"role": "assistant", "content": "", "tool_calls": res1.tool_calls},
+            {"role": "tool", "tool_call_id": "call_a", "name": "station_search", "content": '{"matches": [{"code": "JP"}]}'},
+            {"role": "tool", "tool_call_id": "call_b", "name": "station_search", "content": '{"matches": [{"code": "UDZ"}]}'},
+        ]
+    )
+    assert res2.has_tool_calls is False
+    assert "JP" in res2.content and "UDZ" in res2.content
+    sent_msgs = mock_groq.chat.completions.create.call_args_list[1].kwargs["messages"]
+    assert sent_msgs[1]["tool_calls"][0]["id"] == "call_a"
+    assert sent_msgs[2]["role"] == "tool" and sent_msgs[3]["role"] == "tool"
+
+
+def test_gemini_multi_tool_calls_invalid_response_and_connection_error():
+    fc1 = SimpleNamespace(text=None, function_call=SimpleNamespace(name="station_search", args={"query": "Jaipur"}))
+    fc2 = SimpleNamespace(text=None, function_call=SimpleNamespace(name="train_details", args={"train_number": "12315"}))
+
+    fake_multi = _make_fake_gemini_module(
+        lambda *a, **kw: SimpleNamespace(
+            candidates=[SimpleNamespace(content=SimpleNamespace(parts=[fc1, fc2]), finish_reason="STOP")],
+            usage_metadata=None,
+        )
+    )
+    client = LLMClient(
+        config=LLMConfig(provider="gemini", gemini_api_key="AIza_ok"),
+        gemini_module=fake_multi,
+    )
+    res = client.chat([{"role": "user", "content": "Lookup Jaipur and 12315"}])
+    assert len(res.tool_calls) == 2
+    assert res.tool_calls[0].arguments == {"query": "Jaipur"}
+    assert res.tool_calls[1].arguments == {"train_number": "12315"}
+
+    # Empty candidates raises LLMInvalidResponseError
+    fake_empty = _make_fake_gemini_module(
+        lambda *a, **kw: SimpleNamespace(candidates=[], usage_metadata=None)
+    )
+    client_empty = LLMClient(
+        config=LLMConfig(provider="gemini", gemini_api_key="AIza_ok", max_retries=0),
+        gemini_module=fake_empty,
+    )
+    with pytest.raises(LLMInvalidResponseError):
+        client_empty.chat([{"role": "user", "content": "Hi"}])
+
+    # Network ConnectionError maps to LLMConnectionError
+    fake_conn = _make_fake_gemini_module(
+        lambda *a, **kw: (_ for _ in ()).throw(ConnectionError("Socket closed"))
+    )
+    client_conn = LLMClient(
+        config=LLMConfig(provider="gemini", gemini_api_key="AIza_ok", max_retries=1),
+        gemini_module=fake_conn,
+        sleep_fn=lambda _: None,
+    )
+    with pytest.raises(LLMConnectionError):
+        client_conn.chat([{"role": "user", "content": "Hi"}])

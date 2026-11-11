@@ -154,7 +154,19 @@ flowchart TD
 | :--- | :--- | :--- |
 | **1. Christy (Me)** | LLM client, prompts, grounded answers, AI tool loop, memory adapter | Owns `llm.py`, `prompts.py`, `answer.py`, `memory_adapter.py`, `ai_assistant.py`. |
 | **2. Krishna** | SQLite DB (`rail_timetable.db`), station/train queries, document search | Provides chunks (`doc`, `page`, `date`, `text`) and read-only SQL outputs (`sql`, `rows`) surfaced via tools. |
-| **3. Neha** | Tool schemas, argument validation, query routing, tool execution | Supplies OpenAI-style `tool_schemas` and `ToolExecutor.execute(name, args)` injected into `AIAssistant`. |
+| **3. Neha** | Tool schemas, argument validation, query routing, tool execution | Supplies OpenAI-style `tool_schemas` and `ToolRegistry.call(name, args)` (or `.execute`) injected into `AIAssistant`. |
 | **4. Prasad** | Session store, conversation storage, response reliability | Supplies session store matching `MemoryBackendProtocol` injected into `MemoryAdapter(backend=...)`. |
 | **5. Ram** | `pipeline.py`, `ask(question)`, CLI runners, evaluation, main README | Instantiates `AIAssistant` with all team components and delegates `ask(question)` calls to it. |
+
+---
+
+## 7. Step-by-Step Technical Evaluation Walkthrough
+
+When demonstrating Member 1 during the live presentation or viva, walk through these 5 steps:
+
+1. **Multi-Provider Initialization (`helpdesk/llm.py`):** Show `.env.example` and explain how `LLMConfig.from_env()` defaults to Gemini (`gemini-2.5-flash`) for automated capstone evaluation while allowing instant switching to Groq (`llama-3.3-70b-versatile`) via `LLM_PROVIDER=groq`.
+2. **Modular System Prompts (`helpdesk/prompts.py`):** Point out how `build_assistant_system_prompt()` composes evidence-only grounding, circular date precedence, and the 2016 snapshot scope without embedding any test answers.
+3. **Tool-Calling Loop (`helpdesk/ai_assistant.py`):** Explain how `AIAssistant.process_question()` runs up to `max_tool_steps`, dispatches calls to Neha's `ToolRegistry.call()`, unwraps `{"status": "success", "result": ...}`, and collects evidence across multiple tools.
+4. **Memory Budgeting (`helpdesk/memory_adapter.py`):** Explain how `MemoryAdapter` connects to Prasad's session store via `MemoryBackendProtocol`, enforces `max_messages` and `max_tokens`, and groups `assistant(tool_calls)` + `tool` pairs atomically.
+5. **Grounded Validation (`helpdesk/answer.py`) & Verification (`pytest`):** Show how `AnswerGenerator` validates `(doc, page)` citations against an allowlist, normalizes HTML pages to `null`, locks `sql` to real executed SQL only, and run `.\.venv\Scripts\python.exe -m pytest -v` to demonstrate all 49 unit tests passing.
 

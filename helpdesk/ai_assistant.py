@@ -36,10 +36,18 @@ logger = logging.getLogger(__name__)
 
 @runtime_checkable
 class ToolExecutorProtocol(Protocol):
-    """Expected integration contract for Member 3 (Neha)'s tool executor."""
+    """Expected integration contract for tool executors exposing execute()."""
 
     def execute(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Execute a named tool with validated arguments and return structured data."""
+
+
+@runtime_checkable
+class ToolRegistryProtocol(Protocol):
+    """Integration contract matching Member 3 (Neha)'s tools.registry.ToolRegistry."""
+
+    def call(self, tool_name: str, arguments: Any) -> dict[str, Any]:
+        """Validate arguments and dispatch tool_name, returning status/result envelope."""
 
 
 @dataclass
@@ -153,6 +161,12 @@ def _collect_mapping_payload(
     payload: Mapping[str, Any],
     acc: _EvidenceAccumulator,
 ) -> None:
+    if payload.get("error") and not any(
+        k in payload for k in ("chunks", "documents", "matches", "results", "rows", "data", "trains", "stops")
+    ):
+        acc.tool_errors.append(str(payload["error"]))
+        return
+
     sql_val = payload.get("sql")
     if not _looks_like_sql(sql_val) and _looks_like_sql(payload.get("query")):
         sql_val = payload.get("query")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from helpdesk.ai_assistant import AIAssistant, ToolExecutorProtocol
+from helpdesk.ai_assistant import AIAssistant, ToolExecutorProtocol, ToolRegistryProtocol
 from helpdesk.llm import LLMConnectionError, LLMResponse, ToolCall
 from helpdesk.memory_adapter import MemoryAdapter
 
@@ -419,3 +419,90 @@ def test_neha_tool_registry_error_envelope_handled():
     assert res["dont_know"] is True
     assert res["sources"] == []
     assert res["sql"] is None
+
+
+def test_neha_train_search_and_route_lookup_payloads_and_protocol():
+    neha_schemas = [
+        {
+            "type": "function",
+            "function": {
+                "name": "train_search",
+                "description": "Search for trains between two stations on a given date.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string"},
+                        "destination": {"type": "string"},
+                        "date": {"type": "string"},
+                    },
+                    "required": ["source", "destination", "date"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "route_lookup",
+                "description": "Look up the route for a train number.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"train_number": {"type": "string"}},
+                    "required": ["train_number"],
+                },
+            },
+        },
+    ]
+
+    def _dispatch(name, args):
+        if name == "train_search":
+            return {
+                "status": "success",
+                "tool": "train_search",
+                "result": {
+                    "source": "JP",
+                    "destination": "UDZ",
+                    "trains": [{"number": "12315", "name": "Ananya Express"}],
+                    "sql": "SELECT number, name FROM trains WHERE number = '12315';",
+                },
+            }
+        return {
+            "status": "success",
+            "tool": "route_lookup",
+            "result": {
+                "train_number": "12315",
+                "stops": [{"station": "Jaipur", "departure": "17:20"}],
+            },
+        }
+
+    registry = _FakeNehaRegistry(_dispatch)
+    assert isinstance(registry, ToolRegistryProtocol)
+
+    llm = _make_mock_llm(
+        chat_side_effect=[
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="t1",
+                        name="train_search",
+                        arguments={"source": "JP", "destination": "UDZ", "date": "2026-11-11"},
+                    ),
+                    ToolCall(id="t2", name="route_lookup", arguments={"train_number": "12315"}),
+                ],
+            ),
+            LLMResponse(
+                content=(
+                    '{"answer": "Train 12315 Ananya Express leaves Jaipur at 17:20.", '
+                    '"sources": [], "dont_know": false}'
+                )
+            ),
+        ]
+    )
+
+    assistant = AIAssistant(llm, tool_executor=registry, tool_schemas=neha_schemas)
+    res = assistant.ask("Which train runs from JP to UDZ?")
+
+    assert res["dont_know"] is False
+    assert res["sources"] == []
+    assert res["sql"] == "SELECT number, name FROM trains WHERE number = '12315';"
+    assert "12315" in res["answer"]

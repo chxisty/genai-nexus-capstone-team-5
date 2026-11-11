@@ -8,7 +8,7 @@ Member 1 (Christy Marrya George — AI Assistant Lead) exports:
 - AI assistant coordinator: ``AIAssistant``, ``ToolExecutorProtocol``
 """
 
-from helpdesk.ai_assistant import AIAssistant, ToolExecutorProtocol
+from helpdesk.ai_assistant import AIAssistant, ToolExecutorProtocol, ToolRegistryProtocol
 from helpdesk.answer import AnswerGenerator, GroundedAnswer, SourceCitation
 from helpdesk.llm import (
     LLMAuthError,
@@ -45,6 +45,7 @@ __all__ = [
     "SourceCitation",
     "ToolCall",
     "ToolExecutorProtocol",
+    "ToolRegistryProtocol",
     "build_answer_system_prompt",
     "build_assistant_system_prompt",
 ]

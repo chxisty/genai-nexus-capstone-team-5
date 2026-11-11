@@ -86,3 +86,4 @@ def test_build_grounded_answer_messages_structure():
     assert "RECENT CONVERSATION CONTEXT" in messages[1]["content"]
     assert "DOCUMENT EVIDENCE" in messages[1]["content"]
     assert "PASSENGER QUESTION:" in messages[1]["content"]
+

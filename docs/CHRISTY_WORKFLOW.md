@@ -157,3 +157,4 @@ flowchart TD
 | **3. Neha** | Tool schemas, argument validation, query routing, tool execution | Supplies OpenAI-style `tool_schemas` and `ToolExecutor.execute(name, args)` injected into `AIAssistant`. |
 | **4. Prasad** | Session store, conversation storage, response reliability | Supplies session store matching `MemoryBackendProtocol` injected into `MemoryAdapter(backend=...)`. |
 | **5. Ram** | `pipeline.py`, `ask(question)`, CLI runners, evaluation, main README | Instantiates `AIAssistant` with all team components and delegates `ask(question)` calls to it. |
+

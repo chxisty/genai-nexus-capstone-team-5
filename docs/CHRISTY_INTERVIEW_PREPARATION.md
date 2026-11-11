@@ -92,3 +92,4 @@ Every unit test in `tests/` mocks the external SDK clients (`groq_client`, `gemi
 Two important real-world Gemini SDK details:
 1. `google-generativeai` raises a `400 InvalidArgument` error if `response_mime_type="application/json"` is combined with `tools` (function declarations). So `LLMClient` only sets `response_mime_type="application/json"` when `response_format == "json"` and `tools` is empty—while `AIAssistant` uses tools in the reasoning loop and then runs JSON synthesis without tools in `AnswerGenerator`.
 2. Gemini requires `FunctionResponse.response` to be a dictionary (`Struct`), not a bare list or string, so `_convert_messages_to_gemini()` wraps non-dict tool results as `{"result": ...}`.
+

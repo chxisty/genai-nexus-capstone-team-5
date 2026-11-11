@@ -232,3 +232,4 @@ def build_grounded_answer_messages(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": "\n\n---\n\n".join(parts)},
     ]
+

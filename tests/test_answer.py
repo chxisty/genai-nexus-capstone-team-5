@@ -135,3 +135,4 @@ def test_extract_allowed_sources_deduplicates_and_handles_paths():
         ("rb_cc08_2025_tatkal.pdf", 2),
         ("indianrail_refund_rules_2015.html", None),
     ]
+

@@ -113,3 +113,4 @@ def test_integrates_with_prasad_custom_backend():
     assert len(ctx) == 2
     adapter.clear_session("team_session")
     assert adapter.get_raw_history("team_session") == []
+

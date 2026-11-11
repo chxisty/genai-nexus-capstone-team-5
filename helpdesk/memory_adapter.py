@@ -378,3 +378,4 @@ class MemoryAdapter:
             return dict(message)
         truncated = content[: max(1, char_limit - 3)].rstrip() + "..."
         return {"role": message["role"], "content": truncated}
+

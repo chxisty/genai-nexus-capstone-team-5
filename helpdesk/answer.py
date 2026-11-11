@@ -302,3 +302,4 @@ class AnswerGenerator:
             sql=validated_sql,
             dont_know=False,
         )
+

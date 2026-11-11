@@ -346,3 +346,76 @@ def test_max_tool_steps_reached_synthesizes_collected_evidence():
     res = assistant.ask("When is the first reservation chart prepared?")
     assert res["dont_know"] is False
     assert res["sources"] == [{"doc": "rb_cc10_2025_reservation_charts.pdf", "page": 2}]
+
+
+class _FakeNehaRegistry:
+    """Simulates Member 3 (Neha)'s ToolRegistry.call() contract exactly."""
+
+    def __init__(self, fn):
+        self.fn = fn
+
+    def call(self, tool_name: str, arguments: dict) -> dict:
+        return self.fn(tool_name, arguments)
+
+
+def test_neha_tool_registry_envelope_and_station_query_not_treated_as_sql():
+    registry = _FakeNehaRegistry(
+        lambda name, args: {
+            "status": "success",
+            "tool": "station_search",
+            "result": {
+                "query": "New Delhi",
+                "matches": [{"code": "NDLS", "name": "New Delhi"}],
+            },
+        }
+        if name == "station_search"
+        else {"status": "error", "tool": name, "error": "Unknown tool"}
+    )
+    llm = _make_mock_llm(
+        chat_side_effect=[
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(id="t1", name="station_search", arguments={"query": "New Delhi"})
+                ],
+            ),
+            LLMResponse(
+                content='{"answer": "The station code for New Delhi is NDLS.", "sources": [], "dont_know": false}'
+            ),
+        ]
+    )
+
+    assistant = AIAssistant(llm, tool_executor=registry, tool_schemas=MOCK_TOOL_SCHEMAS)
+    res = assistant.ask("What is the station code for New Delhi?")
+
+    assert res["dont_know"] is False
+    assert res["answer"] == "The station code for New Delhi is NDLS."
+    assert res["sources"] == []
+    # Crucial: 'query': 'New Delhi' from station_search must NOT leak into 'sql'
+    assert res["sql"] is None
+
+
+def test_neha_tool_registry_error_envelope_handled():
+    registry = _FakeNehaRegistry(
+        lambda name, args: {
+            "status": "error",
+            "tool": name,
+            "error": "Missing required argument 'train_number'.",
+        }
+    )
+    llm = _make_mock_llm(
+        chat_side_effect=[
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="t1", name="train_details", arguments={})],
+            ),
+            LLMResponse(content="I don't know because a valid train number is required."),
+        ]
+    )
+
+    assistant = AIAssistant(llm, tool_executor=registry, tool_schemas=MOCK_TOOL_SCHEMAS)
+    res = assistant.ask("Tell me details about the train.")
+
+    assert res["dont_know"] is True
+    assert res["sources"] == []
+    assert res["sql"] is None

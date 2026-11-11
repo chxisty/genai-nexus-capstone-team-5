@@ -163,9 +163,10 @@ Instead of one monolithic prompt, reusable constants represent distinct policy r
 1. **Member 2 (Krishna — `helpdesk/sql.py`, `helpdesk/search.py`):**
    - Document chunks should provide `doc` (or `source`/`filename`), `page` (`int` for PDF, `None` for HTML), `text` (or `content`), and optional `date`.
    - SQL results should provide `sql` (the read-only `SELECT` statement actually executed) and `rows` (or `results`/`data`).
-2. **Member 3 (Neha — Tool Schemas & Executor):**
+2. **Member 3 (Neha — Tool Schemas & Executor, `tools/registry.py` & `tools/schemas.py`):**
    - Provide OpenAI-compatible `tool_schemas` (`[{"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}]`).
-   - Provide `tool_executor` implementing `.execute(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]` (or a callable `(tool_name, arguments) -> dict`).
+   - Provide `tool_executor` implementing `.call(tool_name, arguments)` (Neha's `ToolRegistry.call()` returning `{"status": "success", "tool": ..., "result": ...}` or `{"status": "error", "tool": ..., "error": ...}`), `.execute(tool_name, arguments)`, or a callable `(tool_name, arguments) -> dict`.
+   - `AIAssistant` automatically unwraps `ToolRegistry`'s `result` envelope and distinguishes search strings (such as `station_search`'s `"query": "New Delhi"`) from executed SQL statements (`SELECT ...`).
 3. **Member 4 (Prasad — Session/Memory Store):**
    - Provide a store implementing `MemoryBackendProtocol` (`create_session`, `has_session`, `get_history`, `add_message`, `clear_session`), passed to `MemoryAdapter(backend=prasad_store)`.
 4. **Member 5 (Ram — `helpdesk/pipeline.py`, `ask.py`, `run_questions.py`):**

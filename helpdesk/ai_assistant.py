@@ -69,12 +69,25 @@ def _looks_like_doc_chunk(item: Mapping[str, Any]) -> bool:
     return bool(doc_keys & set(item.keys())) or bool(text_keys & set(item.keys()))
 
 
+def _looks_like_sql(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    stripped = value.strip().upper()
+    return stripped.startswith("SELECT ") or stripped.startswith("WITH ")
+
+
+def _extract_doc_chunks(items: Any) -> list[dict[str, Any]]:
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+        return []
+    return [dict(item) for item in items if isinstance(item, Mapping) and _looks_like_doc_chunk(item)]
+
+
 def _collect_evidence_from_tool_result(
     tool_name: str,
     raw_result: Any,
     acc: _EvidenceAccumulator,
 ) -> dict[str, Any]:
-    """Normalize a tool output payload and accumulate verified evidence."""
+    """Normalize a tool output payload (including ToolRegistry envelopes) and collect evidence."""
     parsed: Any = raw_result
     if isinstance(raw_result, str):
         try:
@@ -83,80 +96,126 @@ def _collect_evidence_from_tool_result(
             parsed = {"ok": True, "text": raw_result}
 
     if isinstance(parsed, Mapping):
-        if parsed.get("ok") is False or (parsed.get("error") and not parsed.get("chunks") and not parsed.get("rows")):
+        status = str(parsed.get("status", "")).lower()
+        is_error = (
+            parsed.get("ok") is False
+            or status == "error"
+            or (
+                bool(parsed.get("error"))
+                and not parsed.get("chunks")
+                and not parsed.get("rows")
+                and not parsed.get("result")
+            )
+        )
+        if is_error:
             acc.tool_errors.append(str(parsed.get("error") or f"Tool {tool_name} failed"))
             return dict(parsed)
 
-        sql_val = parsed.get("sql") or parsed.get("query")
-        if isinstance(sql_val, str) and sql_val.strip():
-            cleaned_sql = sql_val.strip()
-            if cleaned_sql not in acc.sql_queries:
-                acc.sql_queries.append(cleaned_sql)
-            acc.had_db_query = True
+        # Unwrap Member 3 (Neha)'s ToolRegistry envelope: {"status": "success", "tool": ..., "result": {...}}
+        if status == "success" and "result" in parsed:
+            inner = parsed["result"]
+            if isinstance(inner, Mapping):
+                _collect_mapping_payload(tool_name, inner, acc)
+            elif isinstance(inner, Sequence) and not isinstance(inner, (str, bytes)):
+                _collect_sequence_payload(tool_name, inner, acc)
+            elif inner is not None:
+                acc.had_db_query = True
+                acc.db_results.append({"tool": tool_name, "result": inner})
+            return dict(parsed)
 
-        # Extract document chunks from standard keys
-        chunk_candidates = (
-            parsed.get("chunks")
-            or parsed.get("documents")
-            or parsed.get("matches")
-        )
-        if isinstance(chunk_candidates, Sequence) and not isinstance(chunk_candidates, (str, bytes)):
-            for item in chunk_candidates:
+        _collect_mapping_payload(tool_name, parsed, acc)
+        return dict(parsed)
+
+    if isinstance(parsed, Sequence) and not isinstance(parsed, (str, bytes)):
+        items = list(parsed)
+        _collect_sequence_payload(tool_name, items, acc)
+        return {"ok": True, "results": items}
+
+    return {"ok": True, "result": parsed}
+
+
+def _collect_sequence_payload(
+    tool_name: str,
+    items: Sequence[Any],
+    acc: _EvidenceAccumulator,
+) -> None:
+    doc_chunks = _extract_doc_chunks(items)
+    if doc_chunks and len(doc_chunks) == len(items):
+        acc.chunks.extend(doc_chunks)
+        acc.source_metadata.extend(doc_chunks)
+    elif items:
+        acc.had_db_query = True
+        acc.db_results.append({"tool": tool_name, "rows": list(items)})
+
+
+def _collect_mapping_payload(
+    tool_name: str,
+    payload: Mapping[str, Any],
+    acc: _EvidenceAccumulator,
+) -> None:
+    sql_val = payload.get("sql")
+    if not _looks_like_sql(sql_val) and _looks_like_sql(payload.get("query")):
+        sql_val = payload.get("query")
+    if _looks_like_sql(sql_val):
+        cleaned_sql = str(sql_val).strip()
+        if cleaned_sql not in acc.sql_queries:
+            acc.sql_queries.append(cleaned_sql)
+        acc.had_db_query = True
+
+    found_docs = False
+    for doc_key in ("chunks", "documents"):
+        val = payload.get(doc_key)
+        if isinstance(val, Sequence) and not isinstance(val, (str, bytes)):
+            for item in val:
                 if isinstance(item, Mapping):
                     acc.chunks.append(dict(item))
                     acc.source_metadata.append(dict(item))
+                    found_docs = True
 
-        # Handle ambiguous "results" key depending on whether it's SQL rows or doc chunks
-        results_val = parsed.get("results")
-        if isinstance(results_val, Sequence) and not isinstance(results_val, (str, bytes)):
-            if results_val and all(isinstance(r, Mapping) and _looks_like_doc_chunk(r) for r in results_val) and not sql_val:
-                for item in results_val:
-                    acc.chunks.append(dict(item))
-                    acc.source_metadata.append(dict(item))
+    # Check "matches" / "results" carefully: could be doc chunks OR structured station/DB rows
+    for list_key in ("matches", "results"):
+        val = payload.get(list_key)
+        if isinstance(val, Sequence) and not isinstance(val, (str, bytes)):
+            doc_items = _extract_doc_chunks(val)
+            if doc_items and len(doc_items) == len(val):
+                acc.chunks.extend(doc_items)
+                acc.source_metadata.extend(doc_items)
+                found_docs = True
             else:
                 acc.had_db_query = True
                 acc.db_results.append(
                     {
                         "tool": tool_name,
-                        "sql": sql_val,
-                        "columns": parsed.get("columns"),
-                        "rows": list(results_val),
+                        "sql": cleaned_sql if _looks_like_sql(sql_val) else None,
+                        "columns": payload.get("columns"),
+                        "rows": list(val),
                     }
                 )
 
-        # Extract explicit SQL row fields
-        for row_key in ("rows", "data"):
-            if row_key in parsed and parsed[row_key] is not None:
-                acc.had_db_query = True
-                acc.db_results.append(
-                    {
-                        "tool": tool_name,
-                        "sql": sql_val,
-                        "columns": parsed.get("columns"),
-                        "rows": parsed[row_key],
-                    }
-                )
-                break
-
-        # Also check explicit standalone text chunk
-        if "text" in parsed and _looks_like_doc_chunk(parsed) and not chunk_candidates:
-            acc.chunks.append(dict(parsed))
-            acc.source_metadata.append(dict(parsed))
-
-        return dict(parsed)
-
-    if isinstance(parsed, Sequence) and not isinstance(parsed, (str, bytes)):
-        items = list(parsed)
-        if items and all(isinstance(i, Mapping) and _looks_like_doc_chunk(i) for i in items):
-            for item in items:
-                acc.chunks.append(dict(item))
-                acc.source_metadata.append(dict(item))
-        elif items:
+    for row_key in ("rows", "data", "trains", "stops"):
+        if row_key in payload and payload[row_key] is not None:
             acc.had_db_query = True
-            acc.db_results.append({"tool": tool_name, "rows": items})
-        return {"ok": True, "results": items}
+            acc.db_results.append(
+                {
+                    "tool": tool_name,
+                    "sql": cleaned_sql if _looks_like_sql(sql_val) else None,
+                    "columns": payload.get("columns"),
+                    "rows": payload[row_key],
+                }
+            )
+            return
 
-    return {"ok": True, "result": parsed}
+    if "text" in payload and _looks_like_doc_chunk(payload) and not found_docs:
+        acc.chunks.append(dict(payload))
+        acc.source_metadata.append(dict(payload))
+        return
+
+    # Catch structured dict responses like train_details({"train_number": ..., "name": ...})
+    if not found_docs and "matches" not in payload and "results" not in payload:
+        informative_keys = set(payload.keys()) - {"ok", "status", "tool", "_note"}
+        if informative_keys:
+            acc.had_db_query = True
+            acc.db_results.append({"tool": tool_name, "data": dict(payload)})
 
 
 class AIAssistant:

@@ -561,6 +561,8 @@ class AIAssistant:
         # 1. Train search between two stations
         route_match = re.search(r"\bfrom\s+([A-Za-z\s]+?)\s+to\s+([A-Za-z\s]+?)(?:\?|$|\.|\s+on|\s+date)", q, re.IGNORECASE)
         if not route_match:
+            route_match = re.search(r"\bbetween\s+([A-Za-z\s]+?)\s+and\s+([A-Za-z\s]+?)(?:\?|$|\.|\s+on|\s+date)", q, re.IGNORECASE)
+        if not route_match:
             route_match = re.search(r"\b([A-Za-z]{2,5})\s+to\s+([A-Za-z]{2,5})\b", q, re.IGNORECASE)
         if route_match:
             src = route_match.group(1).strip()

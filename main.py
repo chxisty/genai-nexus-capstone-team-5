@@ -25,11 +25,8 @@ _venv_python = (
 )
 
 if _venv_python and os.path.abspath(sys.executable).lower() != os.path.abspath(_venv_python).lower():
-    try:
-        import dotenv  # noqa: F401
-    except ImportError:
-        import subprocess
-        sys.exit(subprocess.call([_venv_python] + sys.argv))
+    import subprocess
+    sys.exit(subprocess.call([_venv_python] + sys.argv))
 
 from helpdesk.pipeline import RailwayHelpDeskPipeline, get_pipeline
 

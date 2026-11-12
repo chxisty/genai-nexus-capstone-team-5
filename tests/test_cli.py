@@ -7,17 +7,13 @@ Verifies command dispatch, session commands, banners, and format_response.
 
 from __future__ import annotations
 
-import io
 import sys
 from unittest.mock import patch
 import pytest
 
-from helpdesk.pipeline import RailwayHelpDeskPipeline
 from main import (
-    BANNER,
     format_response,
     main,
-    print_history,
     run_interactive,
 )
 

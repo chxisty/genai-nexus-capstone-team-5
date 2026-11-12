@@ -14,45 +14,45 @@ The Railway Passenger Help Desk is engineered as a multi-tier, modular AI assist
 
 ```mermaid
 graph TD
-    subgraph Presentation_Layer [Presentation Layer - Ram]
-        CLI[main.py / ask.py]
-        REPL[Interactive Terminal REPL]
+    subgraph Presentation_Layer["Presentation Layer (Ram)"]
+        CLI["main.py / ask.py"]
+        REPL["Interactive Terminal REPL"]
     end
 
-    subgraph Integration_Pipeline [Pipeline Orchestration - Ram]
-        Pipe[helpdesk.pipeline.RailwayHelpDeskPipeline]
+    subgraph Integration_Pipeline["Pipeline Orchestration (Ram)"]
+        Pipe["helpdesk.pipeline.RailwayHelpDeskPipeline"]
     end
 
-    subgraph Reliability_Layer [Reliability & Context - Prasad]
-        Reliable[helpdesk.reliability.ReliableHelpDesk]
-        Context[helpdesk.context_handler.ContextHandler]
-        ContractCheck[ReliableHelpDesk.validate_response]
+    subgraph Reliability_Layer["Reliability and Context (Prasad)"]
+        Reliable["helpdesk.reliability.ReliableHelpDesk"]
+        Context["helpdesk.context_handler.ContextHandler"]
+        ContractCheck["ReliableHelpDesk.validate_response"]
     end
 
-    subgraph Assistant_Layer [AI Assistant & Grounding - Christy]
-        Assist[helpdesk.ai_assistant.AIAssistant]
-        AnswerGen[helpdesk.answer.AnswerGenerator]
-        EvidenceAcc[helpdesk.ai_assistant._EvidenceAccumulator]
-        PromptBuilder[helpdesk.prompts.build_assistant_system_prompt]
+    subgraph Assistant_Layer["AI Assistant and Grounding (Christy)"]
+        Assist["helpdesk.ai_assistant.AIAssistant"]
+        AnswerGen["helpdesk.answer.AnswerGenerator"]
+        EvidenceAcc["helpdesk.ai_assistant._EvidenceAccumulator"]
+        PromptBuilder["helpdesk.prompts.build_assistant_system_prompt"]
     end
 
-    subgraph LLM_Layer [Provider Adapter - Christy]
-        LLM[helpdesk.llm.LLMClient]
-        Gemini[Google Gemini API / google-genai]
-        Groq[Groq Cloud API / groq]
+    subgraph LLM_Layer["Provider Adapter (Christy)"]
+        LLM["helpdesk.llm.LLMClient"]
+        Gemini["Google Gemini API (google-genai)"]
+        Groq["Groq Cloud API (groq)"]
     end
 
-    subgraph Memory_Layer [Session Memory - Prasad & Christy]
-        MemAdapter[helpdesk.memory_adapter.MemoryAdapter]
-        SessMgr[helpdesk.session_manager.SessionManager]
-        SessDB[(data/sessions.db - SQLite)]
+    subgraph Memory_Layer["Session Memory (Prasad and Christy)"]
+        MemAdapter["helpdesk.memory_adapter.MemoryAdapter"]
+        SessMgr["helpdesk.session_manager.SessionManager"]
+        SessDB[("data/sessions.db (SQLite)")]
     end
 
-    subgraph Tool_Calling_Layer [Tool Calling & DB - Neha & Krishna]
-        Registry[tools.registry.ToolRegistry]
-        Schemas[tools.schemas.TOOL_SCHEMAS]
-        DBTools[tools.database_tools]
-        RailDB[(data/rail_timetable.db - Read Only)]
+    subgraph Tool_Calling_Layer["Tool Calling and DB (Neha and Krishna)"]
+        Registry["tools.registry.ToolRegistry"]
+        Schemas["tools.schemas.TOOL_SCHEMAS"]
+        DBTools["tools.database_tools"]
+        RailDB[("data/rail_timetable.db (Read Only)")]
     end
 
     CLI --> Pipe
@@ -147,15 +147,15 @@ graph TD
 sequenceDiagram
     autonumber
     actor Passenger
-    participant CLI as main.py
-    participant Pipe as RailwayHelpDeskPipeline
-    participant Rel as ReliableHelpDesk
-    participant Ctx as ContextHandler
-    participant Assist as AIAssistant
-    participant Mem as MemoryAdapter
-    participant LLM as LLMClient
-    participant Reg as ToolRegistry
-    participant DB as tools.database_tools
+    participant CLI as "main.py"
+    participant Pipe as "helpdesk.pipeline"
+    participant Rel as "ReliableHelpDesk"
+    participant Ctx as "ContextHandler"
+    participant Assist as "AIAssistant"
+    participant Mem as "MemoryAdapter"
+    participant LLM as "LLMClient"
+    participant Reg as "ToolRegistry"
+    participant DB as "tools.database_tools"
 
     Passenger->>CLI: "Which trains go from LTT to GWL?"
     CLI->>Pipe: ask("Which trains go from LTT to GWL?", session_id)
@@ -190,10 +190,10 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     actor Passenger
-    participant CLI as main.py
-    participant Rel as ReliableHelpDesk
-    participant Ctx as ContextHandler
-    participant Mem as MemoryAdapter
+    participant CLI as "main.py"
+    participant Rel as "ReliableHelpDesk"
+    participant Ctx as "ContextHandler"
+    participant Mem as "MemoryAdapter"
 
     Passenger->>CLI: "What time does that train leave?" (No prior train context)
     CLI->>Rel: ask("What time does that train leave?", session_id)

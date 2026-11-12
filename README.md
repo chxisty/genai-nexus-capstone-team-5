@@ -41,33 +41,33 @@ Passengers inquiring about train schedules, routes, and station codes frequently
 
 ```mermaid
 flowchart TD
-    User([Passenger / CLI User]) <--> Main[main.py - Terminal REPL]
-    Main <--> Pipeline[helpdesk.pipeline - RailwayHelpDeskPipeline]
+    User(["Passenger / CLI User"]) <--> Main["main.py (Terminal REPL)"]
+    Main <--> Pipeline["helpdesk.pipeline (RailwayHelpDeskPipeline)"]
 
-    subgraph Reliability & Context [Member 4 - Prasad]
-        Pipeline <--> Reliable[ReliableHelpDesk]
-        Reliable <--> Context[ContextHandler]
-        Reliable <--> Validator[Response Contract Validator]
+    subgraph Reliability_Context["Reliability and Context (Prasad)"]
+        Pipeline <--> Reliable["helpdesk.reliability.ReliableHelpDesk"]
+        Reliable <--> Context["helpdesk.context_handler.ContextHandler"]
+        Reliable <--> Validator["Response Contract Validator"]
     end
 
-    subgraph AI Assistant & LLM [Member 1 - Christy]
-        Reliable <--> Assistant[AIAssistant]
-        Assistant <--> Prompts[helpdesk.prompts]
-        Assistant <--> AnswerGen[AnswerGenerator]
-        Assistant <--> LLM[LLMClient - Gemini / Groq]
-        Assistant <--> Memory[MemoryAdapter]
+    subgraph AI_Assistant_LLM["AI Assistant and LLM (Christy)"]
+        Reliable <--> Assistant["helpdesk.ai_assistant.AIAssistant"]
+        Assistant <--> Prompts["helpdesk.prompts"]
+        Assistant <--> AnswerGen["helpdesk.answer.AnswerGenerator"]
+        Assistant <--> LLM["LLMClient (Gemini / Groq)"]
+        Assistant <--> Memory["helpdesk.memory_adapter.MemoryAdapter"]
     end
 
-    subgraph Session Storage [Member 4 - Prasad]
-        Memory <--> SessionMgr[SessionManager - SQLite]
-        SessionMgr <--> SessDB[(data/sessions.db)]
+    subgraph Session_Storage["Session Storage (Prasad)"]
+        Memory <--> SessionMgr["helpdesk.session_manager.SessionManager"]
+        SessionMgr <--> SessDB[("data/sessions.db")]
     end
 
-    subgraph Tool Calling & Database [Member 3 - Neha & Member 2 - Krishna]
-        Assistant <--> Registry[tools.registry.ToolRegistry]
-        Registry <--> Schemas[tools.schemas.TOOL_SCHEMAS]
-        Registry <--> DBTools[tools.database_tools]
-        DBTools <--> RailDB[(data/rail_timetable.db - Read Only)]
+    subgraph Tool_Calling_Database["Tool Calling and Database (Neha and Krishna)"]
+        Assistant <--> Registry["tools.registry.ToolRegistry"]
+        Registry <--> Schemas["tools.schemas.TOOL_SCHEMAS"]
+        Registry <--> DBTools["tools.database_tools"]
+        DBTools <--> RailDB[("data/rail_timetable.db (Read Only)")]
     end
 ```
 

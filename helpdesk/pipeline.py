@@ -14,7 +14,6 @@ Components wired:
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
@@ -86,8 +85,10 @@ class RailwayHelpDeskPipeline:
         """Ask a passenger question and return the validated 4-field response dictionary."""
         return self.reliable_helpdesk.ask(question, session_id=session_id)
 
-    def get_history(self, session_id: str) -> list[dict[str, Any]]:
+    def get_history(self, session_id: str | None) -> list[dict[str, Any]]:
         """Retrieve full conversation history for a given session."""
+        if not session_id:
+            return []
         return self.session_manager.get_history(session_id)
 
     def clear_session(self, session_id: str) -> None:

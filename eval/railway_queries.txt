@@ -1,0 +1,220 @@
+================================================================================
+RAILWAY PASSENGER HELP DESK — SYSTEM QUERY EVALUATION LOG
+================================================================================
+Evaluation Date: 2026-11-12
+Environment: Python 3.12 / 3.14 on Windows
+Database: data/rail_timetable.db (SQLite static snapshot)
+Session Storage: data/sessions.db (SQLite persistent manager)
+Response Schema: {"answer": str, "sources": list, "sql": str | None, "dont_know": bool}
+================================================================================
+
+GROUP A: STATION QUERIES
+--------------------------------------------------------------------------------
+[Query A01]
+Query: "Search for New Delhi station"
+Tool Called: station_search(query="New Delhi")
+Expected Behavior: Return matching station details with station code NDLS.
+Actual Result:
+  - Code: "NDLS", Name: "NEW DELHI"
+  - Total Matches: 1
+  - Execution Status: SUCCESS
+Pass/Fail: PASS
+Evidence Source: SQLite table `stations` in data/rail_timetable.db
+
+[Query A02]
+Query: "Find stations matching 'Jaipur'"
+Tool Called: station_search(query="Jaipur")
+Expected Behavior: Return stations matching 'Jaipur', prioritizing exact code JP.
+Actual Result:
+  - Code: "JP", Name: "JAIPUR"
+  - Total Matches: 5 (including Jaipur, Dahar Ka Balaji, etc.)
+  - Execution Status: SUCCESS
+Pass/Fail: PASS
+Evidence Source: SQLite table `stations` in data/rail_timetable.db
+
+
+GROUP B: TRAIN AVAILABILITY IN THE TIMETABLE DATABASE
+--------------------------------------------------------------------------------
+[Query B01]
+Query: "Which trains are available from LTT to GWL?"
+Tool Called: train_search(source="LTT", destination="GWL", date="2026-11-15")
+Expected Behavior: Find scheduled trains connecting Lokmanya Tilak Terminus to Gwalior Junction.
+Actual Result:
+  - Train Count: 6 trains found
+  - Trains: 01101 (Mumbai LTT - Gwalior Special), 01127, 04116, 11079, 12137, 12171
+  - Execution Status: SUCCESS
+Pass/Fail: PASS
+Evidence Source: SQLite tables `schedules`, `trains`, `stations` in data/rail_timetable.db
+
+[Query B02]
+Query: "Find trains from NDLS to BCT"
+Tool Called: train_search(source="NDLS", destination="BCT", date="2026-11-15")
+Expected Behavior: Find trains from New Delhi to Mumbai Central.
+Actual Result:
+  - Train Count: 2 trains found (12952 Mumbai Rajdhani, 12954 August Kranti Rajdhani)
+  - Execution Status: SUCCESS
+Pass/Fail: PASS
+Evidence Source: SQLite tables `schedules`, `trains`, `stations` in data/rail_timetable.db
+
+
+GROUP C: TRAIN DETAILS
+--------------------------------------------------------------------------------
+[Query C01]
+Query: "What are the details for train 01101?"
+Tool Called: train_details(train_number="01101")
+Expected Behavior: Return train name, route endpoints, type, and available coach classes.
+Actual Result:
+  - Number: "01101"
+  - Name: "Mumbai LTT - Gwalior (Weekly) Special"
+  - Source: "LOKMANYA TILAK TERM", Destination: "GWALIOR"
+  - Classes Available: ['3A', 'SL']
+  - Static Note: Included ("This does not provide live running status or seat availability.")
+Pass/Fail: PASS
+Evidence Source: SQLite tables `trains`, `train_types`, `stations` in data/rail_timetable.db
+
+[Query C02]
+Query: "Give details for train 12430"
+Tool Called: train_details(train_number="12430")
+Expected Behavior: Return name and details for train 12430.
+Actual Result:
+  - Number: "12430"
+  - Name: "Bangalore Rajdhani Express"
+  - Classes Available: ['1A', '2A', '3A']
+Pass/Fail: PASS
+Evidence Source: SQLite tables `trains` in data/rail_timetable.db
+
+
+GROUP D: ROUTE QUERIES
+--------------------------------------------------------------------------------
+[Query D01]
+Query: "What is the route for train 01101?"
+Tool Called: route_lookup(train_number="01101")
+Expected Behavior: Return scheduled sequential halts from departure to destination.
+Actual Result:
+  - Total Route Stops: 152 schedule records (halts at LTT, TNA, KYN, IGP, NK, MMR, JL, BSL, KNW, ET, BPL, BINA, JHS, GWL)
+  - Starting Stop: LTT (Stop Sequence 1)
+  - Terminus Stop: GWL (Stop Sequence 152)
+Pass/Fail: PASS
+Evidence Source: SQLite table `schedules` in data/rail_timetable.db
+
+[Query D02]
+Query: "Lookup the route for train 12002"
+Tool Called: route_lookup(train_number="12002")
+Expected Behavior: Return stops for Bhopal Shatabdi Express.
+Actual Result:
+  - Train Name: "New Delhi - Habibganj Shatabdi Express"
+  - Initial Stop: New Delhi (NDLS, departure 06:15)
+  - Halts: Mathura, Agra Cantt, Dholpur, Morena, Gwalior, Jhansi, Lalitpur, Bhopal, Habibganj
+Pass/Fail: PASS
+Evidence Source: SQLite table `schedules` in data/rail_timetable.db
+
+
+GROUP E: FOLLOW-UP QUERIES
+--------------------------------------------------------------------------------
+[Query E01]
+Turn 1: "Find trains from LTT to GWL"
+Turn 2: "What time does that first train depart?"
+Context Analysis:
+  - ContextHandler detected pronoun follow-up ("that first train").
+  - Extracted referenced train 01101 from Turn 1 history.
+Expected Behavior: Answer Turn 2 using context from Turn 1 within the same session.
+Actual Result:
+  - Session ID preserved across turns.
+  - History length: 4 messages in SQLite `sessions.db`.
+  - Departure time for 01101 correctly resolved (15:50).
+Pass/Fail: PASS
+Evidence Source: MemoryAdapter + SessionManager (`data/sessions.db`)
+
+[Query E02]
+Turn 1: "Tell me about train 01101"
+Turn 2: "What are its stops?"
+Context Analysis:
+  - Follow-up detected ("its stops").
+  - Train number 01101 carried forward.
+Expected Behavior: Route lookup for 01101 without needing the user to re-specify the train number.
+Actual Result:
+  - Successfully invoked `route_lookup(train_number="01101")`.
+  - Returned stops list.
+Pass/Fail: PASS
+Evidence Source: MemoryAdapter + ContextHandler
+
+
+GROUP F: RAILWAY POLICY QUERIES (DOCUMENT RAG MODULE ABSENT)
+--------------------------------------------------------------------------------
+[Query F01]
+Query: "What is the cancellation charge for a confirmed ticket cancelled 48 hours before departure?"
+Expected Behavior:
+  - The repository has no document retrieval / RAG module.
+  - The system must NOT hallucinate refund rules, percentages, or cancellation slabs.
+  - System must return an honest refusal with `dont_know: true` and `sources: []`.
+Actual Result:
+  - Answer: "I don't know. I could not find supporting evidence in the official railway documents or timetable database to answer that."
+  - Sources: []
+  - SQL: null
+  - dont_know: true
+Pass/Fail: PASS
+Evidence Source: ReliableHelpDesk Grounding Policy (Absence of RAG backend)
+
+[Query F02]
+Query: "What are the Tatkal booking timings for AC and non-AC classes?"
+Expected Behavior: Honest refusal without hallucinated timing claims.
+Actual Result:
+  - Answer: "I don't know. I could not find supporting evidence in the official railway documents or timetable database to answer that."
+  - dont_know: true, sources: []
+Pass/Fail: PASS
+Evidence Source: Grounded Response Validation Contract
+
+
+GROUP G: UNSUPPORTED REAL-TIME & LIVE STATUS QUESTIONS
+--------------------------------------------------------------------------------
+[Query G01]
+Query: "What is the live running status of train 12951 right now?"
+Expected Behavior:
+  - Decline to provide live running status.
+  - The timetable database is an August 2016 static snapshot.
+Actual Result:
+  - Refusal issued explaining that the system only provides static timetable schedules.
+  - dont_know: true, sources: []
+Pass/Fail: PASS
+Evidence Source: STATIC_NOTE in `tools/database_tools.py`
+
+[Query G02]
+Query: "Check PNR status for 2819283741"
+Expected Behavior: Truthful refusal stating PNR tracking and live confirmation are unavailable.
+Actual Result:
+  - Answer declined with `dont_know: true`.
+  - Zero live claims fabricated.
+Pass/Fail: PASS
+Evidence Source: System prompt boundaries (`helpdesk/prompts.py`)
+
+
+GROUP H: INVALID OR AMBIGUOUS QUESTIONS
+--------------------------------------------------------------------------------
+[Query H01]
+Query: "Find trains from INVALID_STATION to GWL"
+Tool Called: train_search(source="INVALID_STATION", destination="GWL", date="2026-11-15")
+Expected Behavior: Clean error message without uncaught Python exception.
+Actual Result:
+  - Returned dictionary: `{"error": "No station found for 'INVALID_STATION'."}`
+  - No database crash, graceful response surfaced to passenger.
+Pass/Fail: PASS
+Evidence Source: `_resolve_station` in `tools/database_tools.py`
+
+[Query H02]
+Query: "Change the departure time of train 01101 to 08:00 in your database"
+Expected Behavior: Reject write / mutating operations.
+Actual Result:
+  - SQLite database opened in URI read-only mode (`?mode=ro`).
+  - No write tool exists in `TOOL_SCHEMAS`.
+  - Assistant declines modifying static data.
+Pass/Fail: PASS
+Evidence Source: Read-only SQLite connection in `tools/database_tools.py`
+
+================================================================================
+EVALUATION SUMMARY
+================================================================================
+Total Evaluated Queries: 16
+Passed: 16
+Failed: 0
+Overall Pass Rate: 100%
+================================================================================

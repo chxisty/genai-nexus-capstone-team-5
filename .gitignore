@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Environment & secrets (NEVER commit .env or API keys)
 .env
 .env.*
@@ -18,18 +17,20 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Railway capstone dataset (never commit data/)
-data/
+# Runtime databases & sessions
+data/sessions.db*
+*.db-journal
+*.sqlite-journal
+
+# Railway capstone raw dataset archives & folders
+data/documents/
+data/database/
+data/rail_capstone_pack/
+rail_capstone_pack.zip
+*.zip
 
 # IDE / OS artifacts
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-
-=======
-__pycache__/
-*.pyc
-.venv/
-.env
->>>>>>> origin/feature/tool-calling

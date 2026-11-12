@@ -367,10 +367,12 @@ class AIAssistant:
                 context_messages=context_messages,
             )
         except LLMError as exc:
+            config = getattr(self.llm_client, "config", None)
+            known_secrets = config.known_secrets() if (config and hasattr(config, "known_secrets")) else ()
             logger.error(
                 "AI assistant LLM failure (%s): %s",
                 type(exc).__name__,
-                redact_secrets(str(exc), self.llm_client.config.known_secrets()),
+                redact_secrets(str(exc), known_secrets),
             )
             result = GroundedAnswer(
                 answer=(

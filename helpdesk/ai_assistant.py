@@ -23,6 +23,7 @@ from helpdesk.answer import (
 from helpdesk.llm import (
     LLMClient,
     LLMError,
+    LLMAuthError,
     LLMInvalidResponseError,
     LLMResponse,
     extract_json_object,
@@ -369,20 +370,34 @@ class AIAssistant:
         except LLMError as exc:
             config = getattr(self.llm_client, "config", None)
             known_secrets = config.known_secrets() if (config and hasattr(config, "known_secrets")) else ()
-            logger.error(
-                "AI assistant LLM failure (%s): %s",
-                type(exc).__name__,
-                redact_secrets(str(exc), known_secrets),
-            )
-            result = GroundedAnswer(
-                answer=(
-                    "I don't know. I encountered a temporary problem contacting the AI "
-                    "service. Please try again."
-                ),
-                sources=[],
-                sql=normalize_sql_value(evidence.sql_queries),
-                dont_know=True,
-            ).to_dict()
+            if isinstance(exc, LLMAuthError):
+                logger.debug(
+                    "AI assistant LLM failure (%s): %s",
+                    type(exc).__name__,
+                    redact_secrets(str(exc), known_secrets),
+                )
+            else:
+                logger.warning(
+                    "AI assistant LLM failure (%s): %s",
+                    type(exc).__name__,
+                    redact_secrets(str(exc), known_secrets),
+                )
+            fallback = self._try_direct_fallback(cleaned_question)
+            if fallback:
+                result = fallback
+            else:
+                auth_hint = ""
+                if isinstance(exc, LLMAuthError):
+                    auth_hint = " (GEMINI_API_KEY is missing from .env)"
+                result = GroundedAnswer(
+                    answer=(
+                        f"I don't know. I encountered a temporary problem contacting the AI "
+                        f"service{auth_hint}. Please verify your .env configuration."
+                    ),
+                    sources=[],
+                    sql=normalize_sql_value(evidence.sql_queries),
+                    dont_know=True,
+                ).to_dict()
 
         self.memory_adapter.record_assistant_message(
             sid,
@@ -533,3 +548,65 @@ class AIAssistant:
             sql=validated_sql,
             conversation_context=context_messages,
         )
+
+    def _try_direct_fallback(self, question: str) -> dict[str, Any] | None:
+        """Heuristic fallback executing real database tools when LLM is unavailable."""
+        if not self.tool_executor:
+            return None
+
+        import re
+        q = question.strip()
+        norm = re.sub(r"\s+", " ", q).lower()
+
+        # 1. Train search between two stations
+        route_match = re.search(r"\bfrom\s+([A-Za-z\s]+?)\s+to\s+([A-Za-z\s]+?)(?:\?|$|\.|\s+on|\s+date)", q, re.IGNORECASE)
+        if not route_match:
+            route_match = re.search(r"\b([A-Za-z]{2,5})\s+to\s+([A-Za-z]{2,5})\b", q, re.IGNORECASE)
+        if route_match:
+            src = route_match.group(1).strip()
+            dst = route_match.group(2).strip()
+            src = re.sub(r"(?i)\b(trains?|available|any)\b", "", src).strip()
+            if src and dst:
+                res = self._invoke_tool("train_search", {"source": src, "destination": dst, "date": "2026-11-15"})
+                parsed = res.get("result") if isinstance(res, dict) and "result" in res else res
+                if isinstance(parsed, dict) and parsed.get("trains"):
+                    train_list = [f"- {t.get('train_number', t.get('number'))} ({t.get('name')})" for t in parsed["trains"][:10]]
+                    ans = (
+                        f"Based on the timetable database, found {parsed.get('count', len(train_list))} train(s) "
+                        f"between {src.upper()} and {dst.upper()}:\n" + "\n".join(train_list)
+                    )
+                    return GroundedAnswer(answer=ans, sources=[], sql=None, dont_know=False).to_dict()
+
+        # 2. Train route or details for 5-digit train number
+        train_num_match = re.search(r"\b(\d{5})\b", q)
+        if train_num_match:
+            tnum = train_num_match.group(1)
+            if any(w in norm for w in ("route", "stops", "halts", "stations")):
+                res = self._invoke_tool("route_lookup", {"train_number": tnum})
+                parsed = res.get("result") if isinstance(res, dict) and "result" in res else res
+                if isinstance(parsed, dict) and parsed.get("stops"):
+                    stops = [s.get("station_name", s.get("station_code")) for s in parsed["stops"] if s.get("is_halt", 1)]
+                    major_stops = ", ".join(stops[:15]) + ("..." if len(stops) > 15 else "")
+                    ans = f"The route for train {tnum} ({parsed.get('train_name', '')}) includes stops at: {major_stops}."
+                    return GroundedAnswer(answer=ans, sources=[], sql=None, dont_know=False).to_dict()
+            else:
+                res = self._invoke_tool("train_details", {"train_number": tnum})
+                parsed = res.get("result") if isinstance(res, dict) and "result" in res else res
+                if isinstance(parsed, dict) and "name" in parsed:
+                    cls_str = ", ".join(parsed.get("classes", [])) or "None specified"
+                    ans = f"Train {tnum} is {parsed.get('name')} (Type: {parsed.get('train_type', 'Express')}). Available classes: {cls_str}."
+                    return GroundedAnswer(answer=ans, sources=[], sql=None, dont_know=False).to_dict()
+
+        # 3. Station search
+        stn_match = re.search(r"(?:station\s+(?:code\s+)?|search\s+for\s+station\s+|search\s+stations?\s+)(?:in\s+|matching\s+)?['\"]?([A-Za-z\s]+?)['\"]?(?:\?|$|\.|\s+in)", q, re.IGNORECASE)
+        if stn_match:
+            stn_query = stn_match.group(1).strip()
+            if stn_query:
+                res = self._invoke_tool("station_search", {"query": stn_query})
+                parsed = res.get("result") if isinstance(res, dict) and "result" in res else res
+                if isinstance(parsed, dict) and parsed.get("matches"):
+                    matches = [f"- {m.get('name')} ({m.get('code')})" for m in parsed["matches"][:5]]
+                    ans = f"Found station(s) matching '{stn_query}':\n" + "\n".join(matches)
+                    return GroundedAnswer(answer=ans, sources=[], sql=None, dont_know=False).to_dict()
+
+        return None

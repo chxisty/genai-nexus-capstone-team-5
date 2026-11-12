@@ -21,12 +21,9 @@ def main():
         return
 
     args = sys.argv[1:]
-    json_mode = False
-    if args and args[0] == "--json":
-        json_mode = True
-        args = args[1:]
-
-    question = " ".join(args).strip()
+    json_mode = "--json" in args
+    question_parts = [a for a in args if a != "--json"]
+    question = " ".join(question_parts).strip()
     if not question:
         print("Please provide a question.")
         sys.exit(1)

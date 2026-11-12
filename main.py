@@ -92,6 +92,11 @@ def print_history(pipeline: RailwayHelpDeskPipeline, session_id: str) -> None:
 def run_interactive(pipeline: RailwayHelpDeskPipeline) -> None:
     """Run interactive terminal REPL."""
     print(BANNER)
+    has_api_key = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GROQ_API_KEY"))
+    if not has_api_key:
+        print("\n[Tip: Set GEMINI_API_KEY in .env for full AI reasoning. Direct timetable queries work offline via SQLite.]\n")
+    else:
+        print()
     session_id = f"sess_{uuid.uuid4().hex[:10]}"
 
     while True:

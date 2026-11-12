@@ -10,17 +10,11 @@ Does NOT require a real API key.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 import pytest
 
-from helpdesk.ai_assistant import AIAssistant
-from helpdesk.context_handler import ContextHandler
-from helpdesk.llm import LLMAuthError, LLMClient, LLMResponse, ToolCall
-from helpdesk.memory_adapter import MemoryAdapter
+from helpdesk.llm import LLMAuthError, LLMResponse, ToolCall
 from helpdesk.pipeline import RailwayHelpDeskPipeline
-from helpdesk.reliability import ReliableHelpDesk
 from helpdesk.session_manager import SessionManager
 from tools.database_tools import (
     get_connection,
@@ -30,7 +24,6 @@ from tools.database_tools import (
     search_trains,
 )
 from tools.registry import ToolRegistry
-from tools.schemas import TOOL_SCHEMAS
 
 
 class FakeLLMClient:

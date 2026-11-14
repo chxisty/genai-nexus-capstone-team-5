@@ -15,18 +15,20 @@ import sys
 import uuid
 
 # Auto-relaunch inside project virtual environment if running with system Python
-_dir = os.path.dirname(os.path.abspath(__file__))
-_venv_python_win = os.path.join(_dir, ".venv", "Scripts", "python.exe")
-_venv_python_unix = os.path.join(_dir, ".venv", "bin", "python")
-_venv_python = (
-    _venv_python_win
-    if os.path.isfile(_venv_python_win)
-    else (_venv_python_unix if os.path.isfile(_venv_python_unix) else None)
-)
-
-if _venv_python and os.path.abspath(sys.executable).lower() != os.path.abspath(_venv_python).lower():
-    import subprocess
-    sys.exit(subprocess.call([_venv_python] + sys.argv))
+def _relaunch_in_venv_if_needed() -> None:
+    if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    _dir = os.path.dirname(os.path.abspath(__file__))
+    _venv_python_win = os.path.join(_dir, ".venv", "Scripts", "python.exe")
+    _venv_python_unix = os.path.join(_dir, ".venv", "bin", "python")
+    _venv_python = (
+        _venv_python_win
+        if os.path.isfile(_venv_python_win)
+        else (_venv_python_unix if os.path.isfile(_venv_python_unix) else None)
+    )
+    if _venv_python and os.path.abspath(sys.executable).lower() != os.path.abspath(_venv_python).lower():
+        import subprocess
+        sys.exit(subprocess.call([_venv_python] + sys.argv))
 
 from helpdesk.pipeline import RailwayHelpDeskPipeline, get_pipeline
 
@@ -138,6 +140,7 @@ Available Commands:
 
 
 def main() -> None:
+    _relaunch_in_venv_if_needed()
     pipeline = get_pipeline()
 
     if len(sys.argv) > 1:

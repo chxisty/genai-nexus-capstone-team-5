@@ -118,7 +118,7 @@ class LLMConfig:
     gemini_model: str = DEFAULT_GEMINI_MODEL
     groq_api_key: str = ""
     groq_model: str = DEFAULT_GROQ_MODEL
-    timeout_seconds: float = 30.0
+    timeout_seconds: float = 120.0
     max_retries: int = 3
     initial_backoff_seconds: float = 1.0
     backoff_multiplier: float = 2.0
@@ -159,7 +159,7 @@ class LLMConfig:
             gemini_model=os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_GEMINI_MODEL,
             groq_api_key=os.getenv("GROQ_API_KEY", "").strip(),
             groq_model=os.getenv("GROQ_MODEL", "").strip() or DEFAULT_GROQ_MODEL,
-            timeout_seconds=_parse_float_env("LLM_TIMEOUT_SECONDS", 30.0),
+            timeout_seconds=_parse_timeout_env(120.0),
             max_retries=_parse_int_env("LLM_MAX_RETRIES", 3),
             initial_backoff_seconds=_parse_float_env("LLM_INITIAL_BACKOFF_SECONDS", 1.0),
             backoff_multiplier=_parse_float_env("LLM_BACKOFF_MULTIPLIER", 2.0),
@@ -217,6 +217,27 @@ class LLMConfig:
     def known_secrets(self) -> tuple[str, ...]:
         """Return configured secret strings so log/error sanitizers can redact them."""
         return tuple(k for k in (self.gemini_api_key, self.groq_api_key) if k)
+
+
+def _parse_timeout_env(default: float = 120.0) -> float:
+    """Parse timeout in seconds from LLM_TIMEOUT_SECONDS, LLM_TIMEOUT_MS, or TIMEOUT.
+
+    Values >= 1000 or keys ending in _MS are automatically converted from milliseconds
+    to seconds (e.g., 120000 -> 120.0).
+    """
+    for key in ("LLM_TIMEOUT_SECONDS", "LLM_TIMEOUT_MS", "TIMEOUT"):
+        raw = os.getenv(key, "").strip()
+        if raw:
+            try:
+                val = float(raw)
+                if key.endswith("_MS") or val >= 1000.0:
+                    return val / 1000.0
+                return val
+            except ValueError as exc:
+                raise LLMConfigurationError(
+                    f"Environment variable {key} must be a valid number, got {raw!r}."
+                ) from exc
+    return default
 
 
 def _parse_float_env(name: str, default: float) -> float:

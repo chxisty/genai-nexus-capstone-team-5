@@ -1,4 +1,36 @@
-__pycache__/
-*.pyc
-.venv/
+# Environment & secrets (NEVER commit .env or API keys)
 .env
+.env.*
+!.env.example
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime databases & sessions
+data/sessions.db*
+*.db-journal
+*.sqlite-journal
+
+# Railway capstone raw dataset archives & folders
+data/documents/
+data/database/
+data/rail_capstone_pack/
+rail_capstone_pack.zip
+*.zip
+
+# IDE / OS artifacts
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

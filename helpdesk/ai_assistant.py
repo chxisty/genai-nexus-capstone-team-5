@@ -559,19 +559,58 @@ class AIAssistant:
         norm = re.sub(r"\s+", " ", q).lower()
 
         # 1. Train search between two stations
-        route_match = re.search(r"\bfrom\s+([A-Za-z\s]+?)\s+to\s+([A-Za-z\s]+?)(?:\?|$|\.|\s+on|\s+date)", q, re.IGNORECASE)
+        route_match = re.search(r"\bfrom\s+([A-Za-z\s]+?)\s+to\s+([A-Za-z\s]+?)(?:,|\?|$|\.|\s+on|\s+date|\s+and\b)", q, re.IGNORECASE)
         if not route_match:
-            route_match = re.search(r"\bbetween\s+([A-Za-z\s]+?)\s+and\s+([A-Za-z\s]+?)(?:\?|$|\.|\s+on|\s+date)", q, re.IGNORECASE)
+            route_match = re.search(r"\bbetween\s+([A-Za-z\s]+?)\s+and\s+([A-Za-z\s]+?)(?:,|\?|$|\.|\s+on|\s+date|\s+and\b)", q, re.IGNORECASE)
         if not route_match:
             route_match = re.search(r"\b([A-Za-z]{2,5})\s+to\s+([A-Za-z]{2,5})\b", q, re.IGNORECASE)
         if route_match:
             src = route_match.group(1).strip()
             dst = route_match.group(2).strip()
-            src = re.sub(r"(?i)\b(trains?|available|any)\b", "", src).strip()
+            src = re.sub(r"(?i)\b(trains?|available|any|fastest)\b", "", src).strip()
+            dst = re.sub(r"(?i)\b(fastest|how long|duration)\b", "", dst).strip()
             if src and dst:
                 res = self._invoke_tool("train_search", {"source": src, "destination": dst, "date": "2026-11-15"})
                 parsed = res.get("result") if isinstance(res, dict) and "result" in res else res
                 if isinstance(parsed, dict) and parsed.get("trains"):
+                    # Calculate durations if fastest / duration was asked
+                    wants_fastest = any(w in norm for w in ("fastest", "quickest", "duration", "how long", "travel time"))
+                    timed_trains = []
+                    for t in parsed["trains"]:
+                        dep_str = t.get("departure")
+                        arr_str = t.get("arrival")
+                        s_day = t.get("source_day", 1)
+                        d_day = t.get("destination_day", 1)
+                        dur_mins = None
+                        if dep_str and arr_str:
+                            try:
+                                dh, dm = map(int, dep_str.split(":"))
+                                ah, am = map(int, arr_str.split(":"))
+                                dur_mins = ((d_day - 1) * 1440 + ah * 60 + am) - ((s_day - 1) * 1440 + dh * 60 + dm)
+                            except Exception:
+                                pass
+                        timed_trains.append((dur_mins if dur_mins and dur_mins > 0 else 999999, t))
+
+                    timed_trains.sort(key=lambda item: item[0])
+
+                    if wants_fastest and timed_trains and timed_trains[0][0] < 999999:
+                        best_dur, best_t = timed_trains[0]
+                        hrs, mins = divmod(best_dur, 60)
+                        dur_str = f"{hrs} hour{'s' if hrs != 1 else ''} {mins} minute{'s' if mins != 1 else ''}"
+                        other_list = []
+                        for dur, t in timed_trains[1:6]:
+                            th, tm = divmod(dur, 60) if dur < 999999 else (0, 0)
+                            dur_label = f" ({th}h {tm}m)" if dur < 999999 else ""
+                            other_list.append(f"- {t.get('train_number', t.get('number'))} ({t.get('name')}){dur_label}")
+                        others_str = ("\n\nOther trains between these stations:\n" + "\n".join(other_list)) if other_list else ""
+                        ans = (
+                            f"Based on the timetable database, the fastest train from {src.upper()} to {dst.upper()} is "
+                            f"{best_t.get('train_number', best_t.get('number'))} ({best_t.get('name')}).\n"
+                            f"It takes {dur_str} (Departure: {best_t.get('departure')}, Arrival: {best_t.get('arrival')})."
+                            f"{others_str}"
+                        )
+                        return GroundedAnswer(answer=ans, sources=[], sql=None, dont_know=False).to_dict()
+
                     train_list = [f"- {t.get('train_number', t.get('number'))} ({t.get('name')})" for t in parsed["trains"][:10]]
                     ans = (
                         f"Based on the timetable database, found {parsed.get('count', len(train_list))} train(s) "

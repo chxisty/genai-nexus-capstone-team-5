@@ -712,10 +712,14 @@ class LLMClient:
                 return fn()
             except (LLMRateLimitError, LLMTimeoutError, LLMConnectionError) as exc:
                 last_error = exc
-                if attempt >= attempts - 1:
+                # Do not retry daily/exhausted quota limits which cannot succeed
+                is_quota_exhausted = isinstance(exc, LLMRateLimitError) and (
+                    "quota" in str(exc).lower() or "resource_exhausted" in str(exc).lower()
+                )
+                if attempt >= attempts - 1 or is_quota_exhausted:
                     logger.error(
                         "LLM call failed after %d attempts (%s): %s",
-                        attempts,
+                        attempt + 1,
                         type(exc).__name__,
                         self._safe_error_message(exc),
                     )

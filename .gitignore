@@ -26,6 +26,7 @@ data/sessions.db*
 data/documents/
 data/database/
 data/rail_capstone_pack/
+rail_capstone_pack/
 rail_capstone_pack.zip
 *.zip
 

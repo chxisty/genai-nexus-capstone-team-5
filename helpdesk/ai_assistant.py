@@ -297,6 +297,32 @@ class AIAssistant:
         evidence = _EvidenceAccumulator()
         final_response: LLMResponse | None = None
 
+        # Document retrieval from rail_capstone_pack knowledge base
+        try:
+            from helpdesk.search import search as doc_search
+            retrieved_chunks = doc_search(cleaned_question, top_k=4)
+            meaningful_chunks = [c for c in retrieved_chunks if c.get("score", 0.0) >= 0.25]
+            if meaningful_chunks:
+                evidence.chunks.extend(meaningful_chunks)
+                evidence.source_metadata.extend(meaningful_chunks)
+                from helpdesk.prompts import format_document_evidence
+                doc_context = format_document_evidence(meaningful_chunks)
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Official Supporting Documents from rail_capstone_pack:\n"
+                            f"{doc_context}\n\n"
+                            "Instructions for Document Evidence:\n"
+                            "- Synthesize the answer strictly based on these official documents.\n"
+                            "- In your final JSON response, cite each used source under 'sources' "
+                            "with exact 'doc' and 'page' as specified above."
+                        ),
+                    }
+                )
+        except Exception as exc:
+            logger.debug("Document retrieval failed or index unavailable: %s", exc)
+
         try:
             for step in range(self.max_tool_steps):
                 llm_resp = self.llm_client.chat(
@@ -382,7 +408,7 @@ class AIAssistant:
                     type(exc).__name__,
                     redact_secrets(str(exc), known_secrets),
                 )
-            fallback = self._try_direct_fallback(cleaned_question)
+            fallback = self._try_direct_fallback(cleaned_question, evidence=evidence)
             if fallback:
                 result = fallback
             else:
@@ -549,14 +575,33 @@ class AIAssistant:
             conversation_context=context_messages,
         )
 
-    def _try_direct_fallback(self, question: str) -> dict[str, Any] | None:
-        """Heuristic fallback executing real database tools when LLM is unavailable."""
-        if not self.tool_executor:
-            return None
-
+    def _try_direct_fallback(
+        self,
+        question: str,
+        evidence: _EvidenceAccumulator | None = None,
+    ) -> dict[str, Any] | None:
+        """Heuristic fallback executing real database tools and documents when LLM is unavailable."""
         import re
         q = question.strip()
         norm = re.sub(r"\s+", " ", q).lower()
+
+        # 1. Document policy fallback from rail_capstone_pack
+        if evidence and evidence.chunks:
+            top_chunk = evidence.chunks[0]
+            doc_name = top_chunk.get("doc", "")
+            page_val = top_chunk.get("page")
+            text_body = top_chunk.get("text", "").strip()
+            policy_terms = ("refund", "cancel", "tatkal", "chart", "advance", "arp", "clerkage", "waitlist", "rac", "vande bharat", "rule", "fee", "pdr", "tdr")
+            if text_body and any(w in norm for w in policy_terms):
+                clean_lines = [line.strip() for line in text_body.splitlines() if line.strip()]
+                excerpt = "\n".join(clean_lines[:12])
+                page_info = f" (Page {page_val})" if page_val is not None else ""
+                ans = f"Based on official railway document {doc_name}{page_info}:\n\n{excerpt}"
+                sources = [{"doc": doc_name, "page": page_val}]
+                return GroundedAnswer(answer=ans, sources=sources, sql=None, dont_know=False).to_dict()
+
+        if not self.tool_executor:
+            return None
 
         # 1. Train search between two stations
         route_match = re.search(r"\bfrom\s+([A-Za-z\s]+?)\s+to\s+([A-Za-z\s]+?)(?:,|\?|$|\.|\s+on|\s+date|\s+and\b)", q, re.IGNORECASE)
